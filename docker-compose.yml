@@ -1,0 +1,8 @@
+services:
+  stock-agent:
+    build: .
+    env_file: .env
+    volumes:
+      - ./agent.db:/app/agent.db
+      - ./stock_agent.session:/app/stock_agent.session
+    restart: unless-stopped
