@@ -1,0 +1,21 @@
+# OCI Authentication
+compartment_id   = "ocid1.compartment.oc1..your_compartment_ocid"
+tenancy_ocid     = "ocid1.tenancy.oc1..your_tenancy_ocid"
+user_ocid        = "ocid1.user.oc1..your_user_ocid"
+fingerprint      = "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99"
+private_key_path = "~/.oci/oci_api_key.pem"
+
+# SSH Access
+ssh_public_key_path = "~/.ssh/oracle_cloud.pub"
+allowed_ssh_cidr    = "YOUR_HOME_IP/32"
+
+# Telegram Watchdog
+bot_token    = "your_telegram_bot_token"
+alert_chat_id = "your_chat_id"
+
+# Defaults (uncomment to override)
+# region            = "ap-mumbai-1"
+# instance_shape    = "VM.Standard.A1.Flex"
+# instance_ocpus    = 1
+# instance_memory_gb = 6
+# boot_volume_gb    = 50
