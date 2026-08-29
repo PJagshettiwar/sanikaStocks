@@ -16,6 +16,7 @@ Terraform-managed Oracle Cloud Free Tier infrastructure to host the Telegram sto
 - Alerts via existing Telegram bot
 - Manual deployment (SSH + git pull + docker compose)
 - Fully reproducible: tear down and recreate from Terraform
+- **Zero cost**: every resource must be within Oracle Cloud's always-free tier. No paid OCI services, no trial credits.
 
 ## Architecture
 
@@ -41,7 +42,7 @@ All networking resources are free forever on Oracle Cloud. No bandwidth charges 
 | OCPU | 1 (free tier: up to 4 total) |
 | Memory | 6 GB (free tier: up to 24 GB total) |
 | Boot Volume | 50 GB (free tier: up to 200 GB total) |
-| OS | Ubuntu 22.04 (Canonical aarch64) |
+| OS | Ubuntu 24.04 LTS (Canonical aarch64) |
 
 ARM chosen over AMD micro (E2.1.Micro) because:
 - 6 GB RAM vs 1 GB
@@ -59,22 +60,18 @@ Runs on first boot:
 6. Install health watchdog timer
 7. Does NOT auto-start the bot (manual first-run required for .env and session file)
 
-### Monitoring & Alerts (monitoring.tf)
+### Monitoring & Alerts
 
-All alerts delivered via existing Telegram bot (@sanika_stocks_update_bot).
+All alerts delivered via existing Telegram bot (@sanika_stocks_update_bot). No OCI Monitoring Alarms or Notification topics used (avoids complexity, stays purely free tier with zero OCI service dependencies for alerting).
 
 **Systemd Health Watchdog (scripts/health-watchdog.sh):**
 - Systemd timer runs every 5 minutes
-- Checks if `stock-agent` container is running
-- On failure: sends Telegram alert, attempts restart, reports outcome
+- Checks: container running, CPU usage, memory usage, disk usage
+- Thresholds: CPU > 80%, memory > 85%, disk > 80%
+- On container failure: sends Telegram alert, attempts restart, reports outcome
+- On resource threshold breach: sends Telegram warning
 - Uses BOT_TOKEN and CHAT_ID from /opt/stock-agent/.env
-
-**OCI Monitoring Alarms:**
-- CPU > 80% sustained 5 minutes
-- Memory > 85% sustained 5 minutes
-- Boot volume > 80% usage
-- Alarms trigger OCI Notification topic (free tier)
-- Notification topic delivers via HTTPS endpoint to a lightweight webhook script on the VM that forwards to Telegram (same bot token as the watchdog)
+- Uses standard Linux tools (`docker ps`, `top`, `free`, `df`) for all checks
 
 **Boot Volume Backup:**
 - Weekly automatic backup via OCI backup policy
@@ -102,16 +99,15 @@ infra/
   main.tf              # provider config, compartment data source
   network.tf           # VCN, subnet, internet gateway, security list
   compute.tf           # instance, reserved IP, boot volume backup
-  monitoring.tf        # OCI alarms, notification topic
   variables.tf         # all configurable inputs
   outputs.tf           # IP address, SSH command, instance OCID
   terraform.tfvars.example  # template with placeholder values (no secrets)
   cloud-init/
     setup.sh           # first-boot provisioning script
   scripts/
-    health-watchdog.sh  # container health check + Telegram alert
+    health-watchdog.sh  # container health + system metrics check + Telegram alert
     deploy.sh           # manual deploy helper (git pull, rebuild, restart)
-README.md              # updated with full deployment section
+README.md              # updated with deployment section + free tier cost breakdown
 ```
 
 ## Variables (variables.tf)
@@ -143,10 +139,11 @@ README.md              # updated with full deployment section
 
 1. Copy SSH command from Terraform output
 2. SSH into the VM
-3. Create `/opt/stock-agent/.env` with all environment variables
-4. SCP the Telegram session files (`stock_agent.session`, `approval_bot.session`) to the VM
-5. Run `sudo systemctl start stock-agent`
-6. Verify with `/status` command in Telegram
+3. Create `/opt/stock-agent/.env` with all environment variables (see `.env.example` for the full list: Telegram API creds, OpenRouter key, INDstocks auth: CLIENT_ID, TOTP_SECRET, MPIN, TOKEN, plus bot/risk config)
+4. SCP the Telegram session files (`stock_agent.session`, `approval_bot.session`) to `/opt/stock-agent/`
+5. Verify `docker-compose.yml` mounts both session files (update if needed for `approval_bot.session`)
+6. Run `sudo systemctl start stock-agent`
+7. Verify with `/status` command in Telegram
 
 ## Cost
 
@@ -154,7 +151,7 @@ Everything in this design is within Oracle Cloud's always-free tier:
 - Compute: 1 A1.Flex OCPU + 6 GB (of 4 OCPU + 24 GB free)
 - Storage: 50 GB boot volume (of 200 GB free)
 - Network: VCN, subnet, gateway, reserved IP all free
-- Monitoring: OCI alarms and notifications are free
+- Monitoring: local watchdog script (no OCI services needed)
 - Backups: 5 boot volume backups free
 - Bandwidth: 10 TB/month outbound free
 
