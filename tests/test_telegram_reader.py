@@ -46,3 +46,24 @@ async def test_fetch_skips_non_text_messages():
         messages = await fetch_new_messages(mock_client, mock_conn, [123])
 
     assert len(messages) == 0
+
+
+@pytest.mark.asyncio
+async def test_fetch_skips_duplicate_messages():
+    msg1 = FakeMessage(id=200, text="Buy RELIANCE 1480", date="2026-08-28T10:00:00")
+    msg2 = FakeMessage(id=201, text="Buy INFY 1500", date="2026-08-28T10:01:00")
+    mock_client = AsyncMock()
+
+    async def fake_iter(*args, **kwargs):
+        yield msg1
+        yield msg2
+
+    mock_client.iter_messages = MagicMock(return_value=fake_iter())
+    mock_conn = AsyncMock()
+
+    with patch("telegram_reader.get_last_message_id", return_value=199), \
+         patch("telegram_reader.save_message", side_effect=[1, None]):
+        messages = await fetch_new_messages(mock_client, mock_conn, [123])
+
+    assert len(messages) == 1
+    assert messages[0]["text"] == "Buy RELIANCE 1480"

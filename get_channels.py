@@ -1,9 +1,7 @@
 from telethon.sync import TelegramClient
+from config import TELEGRAM_API_ID, TELEGRAM_API_HASH
 
-api_id = 30261858
-api_hash = "33b537f62e2dfea822f6f667269d51cd"
-
-with TelegramClient("stock_agent", api_id, api_hash) as client:
+with TelegramClient("stock_agent", TELEGRAM_API_ID, TELEGRAM_API_HASH) as client:
     for dialog in client.iter_dialogs():
         if dialog.is_group or dialog.is_channel:
             print(f"{dialog.name}: {dialog.id}")

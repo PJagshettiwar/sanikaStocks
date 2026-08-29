@@ -18,6 +18,9 @@ from db import (
     has_duplicate_signal,
     close_trade,
     get_symbol_pnl,
+    update_candidate_entry_range,
+    get_open_buy_trade,
+    cleanup_old_audit_logs,
 )
 
 
@@ -249,3 +252,55 @@ async def test_get_symbol_pnl_aggregates_from_last_buy(db_conn):
     result = await get_symbol_pnl(db_conn, "RELIANCE")
     assert result["trade_count"] == 1
     assert result["total_pnl"] == 30.0
+
+
+@pytest.mark.asyncio
+async def test_update_candidate_entry_range(db_conn):
+    msg_id = await save_message(db_conn, 1, 1, "Buy", "2026-08-28T10:00:00")
+    sig_id = await save_signal(db_conn, msg_id, {
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY",
+        "entry_min": 100, "entry_max": 105, "stop_loss": 90,
+        "targets": [110], "confidence": 0.8,
+    })
+    cid = await save_trade_candidate(db_conn, sig_id, "RELIANCE", 10, 1050, 90, 102, 100, 105)
+
+    await update_candidate_entry_range(db_conn, cid, 1480.0, 1500.0)
+
+    cursor = await db_conn.execute(
+        "SELECT entry_min, entry_max FROM trade_candidates WHERE id = ?", (cid,)
+    )
+    row = await cursor.fetchone()
+    assert row[0] == 1480.0
+    assert row[1] == 1500.0
+
+
+@pytest.mark.asyncio
+async def test_get_open_buy_trade(db_conn):
+    msg_id = await save_message(db_conn, 1, 1, "Buy", "2026-08-28T10:00:00")
+    sig_id = await save_signal(db_conn, msg_id, {
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY",
+        "entry_min": 100, "entry_max": 105, "stop_loss": 90,
+        "targets": [110], "confidence": 0.8,
+    })
+    cid = await save_trade_candidate(db_conn, sig_id, "RELIANCE", 10, 1050, 90, 102, 100, 105)
+    trade_id = await save_trade(db_conn, cid, "RELIANCE", "NSE", "BUY", 10, 105, "ORD1", 10)
+
+    found = await get_open_buy_trade(db_conn, "RELIANCE")
+    assert found == trade_id
+
+    await close_trade(db_conn, trade_id, 115, "SELL1", 10)
+    found_after = await get_open_buy_trade(db_conn, "RELIANCE")
+    assert found_after is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_old_audit_logs(db_conn):
+    await save_audit_log(db_conn, None, "test_action", {"a": 1}, {"b": 2})
+
+    cursor = await db_conn.execute("SELECT COUNT(*) FROM audit_log")
+    assert (await cursor.fetchone())[0] == 1
+
+    await cleanup_old_audit_logs(db_conn, days=90)
+
+    cursor = await db_conn.execute("SELECT COUNT(*) FROM audit_log")
+    assert (await cursor.fetchone())[0] == 1

@@ -84,9 +84,6 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
         quantity = held.net_qty
         amount = round(quantity * quote.price, 2)
     else:
-        balance = await broker.get_balance()
-        if balance < FIXED_ALLOCATION_AMOUNT:
-            return _fail(f"Insufficient funds: balance {balance:,.0f}, need {FIXED_ALLOCATION_AMOUNT:,.0f}. Please add funds.")
         quantity = math.floor(FIXED_ALLOCATION_AMOUNT / entry_max)
         if quantity < 1:
             return _fail(f"Price too high for allocation: {entry_max:,.0f} > {FIXED_ALLOCATION_AMOUNT:,.0f}")

@@ -31,7 +31,8 @@ if "yfinance" not in sys.modules:
 
 from approval_bot import (
     format_trade_card, parse_approval_reply, handle_approval_reply,
-    _msg_to_candidate, _remove_pending,
+    _msg_to_candidate, _remove_pending, verify_order_fill,
+    VERIFY_INTERVAL_SECONDS, VERIFY_MAX_ATTEMPTS,
 )
 
 
@@ -332,3 +333,54 @@ async def test_handle_approval_order_failure():
     mock_audit.assert_not_called()
     mock_trade.assert_not_called()
     mock_status.assert_not_called()
+
+
+# --- verify_order_fill tests (R2-M10) ---
+
+
+@pytest.mark.asyncio
+async def test_verify_order_fill_buy_confirmed():
+    broker = _make_broker()
+    from brokers.base import Position
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1486.0)
+    ]
+    bot = _make_bot_client()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await verify_order_fill("RELIANCE", 5, "BUY", broker, bot, 123, pre_order_qty=5)
+
+    sent_text = bot.send_message.call_args[0][1]
+    assert "FILLED" in sent_text
+    assert "BUY" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_verify_order_fill_sell_confirmed():
+    broker = _make_broker()
+    broker.get_positions.return_value = []
+    bot = _make_bot_client()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await verify_order_fill("RELIANCE", 5, "SELL", broker, bot, 123, pre_order_qty=5)
+
+    sent_text = bot.send_message.call_args[0][1]
+    assert "FILLED" in sent_text
+    assert "SELL" in sent_text
+
+
+@pytest.mark.asyncio
+async def test_verify_order_fill_not_confirmed():
+    broker = _make_broker()
+    from brokers.base import Position
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1486.0)
+    ]
+    bot = _make_bot_client()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock):
+        await verify_order_fill("RELIANCE", 5, "BUY", broker, bot, 123, pre_order_qty=3)
+
+    sent_text = bot.send_message.call_args[0][1]
+    assert "NOT confirmed" in sent_text
+    assert broker.get_positions.call_count == VERIFY_MAX_ATTEMPTS

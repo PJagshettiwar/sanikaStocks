@@ -83,7 +83,8 @@ async def test_default_stop_loss_applied():
 
 
 @pytest.mark.asyncio
-async def test_insufficient_balance_rejected():
+async def test_low_balance_buy_still_passes_validation():
+    """R2-H4: Balance check removed from validate_signal for BUY. Approval flow checks balance."""
     broker = _make_broker(balance=500)
     db_conn = AsyncMock()
     timestamp = datetime.now(timezone.utc).isoformat()
@@ -94,8 +95,7 @@ async def test_insufficient_balance_rejected():
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
         )
-    assert result.valid is False
-    assert "balance" in result.reason.lower()
+    assert result.valid is True
 
 
 @pytest.mark.asyncio

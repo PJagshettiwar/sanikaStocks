@@ -344,10 +344,35 @@ async def get_today_trade_count(conn):
     cursor = await conn.execute(
         """SELECT COUNT(*) FROM trade_candidates
            WHERE status IN ('approved', 'executed')
-             AND created_at > datetime('now', 'start of day')""",
+             AND created_at > datetime('now', '+5 hours', '+30 minutes', 'start of day', '-5 hours', '-30 minutes')""",
     )
     row = await cursor.fetchone()
     return row[0]
+
+
+async def update_candidate_entry_range(conn, candidate_id, new_min, new_max):
+    await conn.execute(
+        "UPDATE trade_candidates SET entry_min = ?, entry_max = ? WHERE id = ?",
+        (new_min, new_max, candidate_id),
+    )
+    await conn.commit()
+
+
+async def get_open_buy_trade(conn, symbol):
+    cursor = await conn.execute(
+        "SELECT id FROM trades WHERE symbol = ? AND side = 'BUY' AND status = 'open' ORDER BY id DESC LIMIT 1",
+        (symbol,),
+    )
+    row = await cursor.fetchone()
+    return row[0] if row else None
+
+
+async def cleanup_old_audit_logs(conn, days=90):
+    await conn.execute(
+        "DELETE FROM audit_log WHERE timestamp < datetime('now', ? || ' days')",
+        (f"-{days}",),
+    )
+    await conn.commit()
 
 
 async def has_duplicate_signal(conn, symbol, channel_id, hours=24):
