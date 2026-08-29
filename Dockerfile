@@ -4,6 +4,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN adduser --disabled-password --no-create-home appuser
 COPY . .
-RUN chmod 600 *.session 2>/dev/null || true
+RUN chmod 600 *.session 2>/dev/null || true && \
+    chmod 600 agent.db 2>/dev/null || true
 USER appuser
 CMD ["python", "main.py"]

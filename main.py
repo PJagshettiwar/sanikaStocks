@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import math
+from datetime import datetime, timezone
 
 import aiosqlite
 import httpx
@@ -14,6 +15,7 @@ from config import FIXED_ALLOCATION_AMOUNT
 from db import (
     init_db, get_recent_messages, save_signal, save_trade_candidate,
     get_all_pending_candidates, update_candidate_status,
+    get_total_api_cost, get_api_cost_summary, cleanup_old_audit_logs,
 )
 from telegram_reader import fetch_new_messages
 from stock_agent import analyze_message, set_cost_db
@@ -37,20 +39,27 @@ db_conn: aiosqlite.Connection = None
 http_client: httpx.AsyncClient = None
 broker: INDstocksBroker = None
 
+last_poll_at: str | None = None
+last_poll_message_count: int = 0
+
 HELP_TEXT = (
     "Commands:\n"
     "/status - health check (broker, LLM, Telegram)\n"
     "/pending - resend all pending trade cards with live prices\n"
     "/cancel <symbol> - cancel a pending trade\n"
+    "/costs - show LLM API usage and costs\n"
     "/help - show this message"
 )
 
 
 async def poll_channels():
+    global last_poll_at, last_poll_message_count
     log.info("Polling %d channels...", len(config.WATCHED_CHANNELS))
 
     messages = await fetch_new_messages(user_client, db_conn, config.WATCHED_CHANNELS)
     log.info("Fetched %d new messages", len(messages))
+    last_poll_at = datetime.now(timezone.utc).isoformat()
+    last_poll_message_count = len(messages)
 
     for msg in messages:
         try:
@@ -128,6 +137,7 @@ async def handle_pending_command():
     await bot_client.send_message(config.APPROVAL_CHAT_ID, f"Resending {len(rows)} pending card(s) with live prices...")
 
     for row in rows:
+        _remove_pending(row["id"])
         targets = json.loads(row["targets"]) if isinstance(row["targets"], str) else row["targets"]
         try:
             quote = await broker.get_quote(row["symbol"], row["exchange"])
@@ -156,8 +166,8 @@ async def handle_status_command():
     checks.append("Telegram: connected")
 
     try:
-        await broker.get_balance()
-        checks.append("Broker (INDstocks): connected")
+        bal = await broker.get_balance()
+        checks.append(f"Broker (INDstocks): connected (balance: {bal:,.0f})")
     except Exception as e:
         try:
             await broker.authenticate()
@@ -181,6 +191,11 @@ async def handle_status_command():
     pending = await get_all_pending_candidates(db_conn)
     checks.append(f"Pending trades: {len(pending)}")
 
+    if last_poll_at:
+        checks.append(f"Last poll: {last_poll_at} ({last_poll_message_count} msgs)")
+    else:
+        checks.append("Last poll: not yet run")
+
     await bot_client.send_message(config.APPROVAL_CHAT_ID, "\n".join(checks))
 
 
@@ -201,8 +216,34 @@ async def handle_cancel_command(text: str):
     for row in matched:
         await update_candidate_status(db_conn, row["id"], "cancelled")
         _remove_pending(row["id"])
+        if row.get("telegram_msg_id"):
+            try:
+                await bot_client.edit_message(
+                    config.APPROVAL_CHAT_ID, row["telegram_msg_id"],
+                    f"--- CANCELLED: {symbol} ---",
+                )
+            except Exception:
+                pass
 
     await bot_client.send_message(config.APPROVAL_CHAT_ID, f"Cancelled {len(matched)} pending trade(s) for {symbol}.")
+
+
+async def handle_costs_command():
+    totals = await get_total_api_cost(db_conn)
+    summary = await get_api_cost_summary(db_conn)
+
+    lines = [
+        f"--- LLM COSTS ---",
+        f"Total calls: {totals['total_calls']}",
+        f"Total cost: ${totals['total_cost_usd']:.4f}",
+        "",
+    ]
+    if summary:
+        lines.append("By model:")
+        for row in summary:
+            lines.append(f"  {row['model']}: {row['calls']} calls, {row['tokens'] or 0} tokens, ${row['cost'] or 0:.4f}")
+
+    await bot_client.send_message(config.APPROVAL_CHAT_ID, "\n".join(lines))
 
 
 async def main():
@@ -215,14 +256,15 @@ async def main():
         http_client = httpx.AsyncClient(timeout=30)
         await init_db(db_conn)
         set_cost_db(db_conn)
+        await cleanup_old_audit_logs(db_conn)
 
         broker = INDstocksBroker(
             client_id=config.INDSTOCKS_CLIENT_ID,
             totp_secret=config.INDSTOCKS_TOTP_SECRET,
             mpin=config.INDSTOCKS_MPIN,
-            token=config.INDSTOCKS_TOKEN,
             http_client=http_client,
         )
+        await broker.authenticate()
 
         user_client = TelegramClient(
             config.TELEGRAM_SESSION_NAME,
@@ -267,8 +309,15 @@ async def main():
             if text.startswith("/cancel"):
                 await handle_cancel_command(text)
                 return
+            if text == "/costs":
+                await handle_costs_command()
+                return
             if text == "/help":
                 await bot_client.send_message(config.APPROVAL_CHAT_ID, HELP_TEXT)
+                return
+
+            if text.startswith("/"):
+                await bot_client.send_message(config.APPROVAL_CHAT_ID, f"Unknown command. Send /help for options.")
                 return
 
             if not event.reply_to:

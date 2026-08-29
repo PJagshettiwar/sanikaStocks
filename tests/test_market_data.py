@@ -51,3 +51,10 @@ async def test_get_quote_falls_back_to_yfinance():
     quote = await get_quote("RELIANCE", "NSE", broker=mock_broker)
     assert quote is not None
     assert quote.symbol == "RELIANCE"
+
+
+@pytest.mark.asyncio
+async def test_get_quote_without_broker_uses_yfinance():
+    quote = await get_quote("RELIANCE", "NSE")
+    assert quote is not None
+    assert quote.price == 1490.0

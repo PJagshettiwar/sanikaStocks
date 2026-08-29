@@ -219,3 +219,86 @@ async def test_analyze_message_tier2_fails_returns_none():
     )
     assert result is None
     assert client.post.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_rejects_invalid_exchange():
+    signal_json = json.dumps({
+        "symbol": "GOLDPETAL",
+        "exchange": "MCX",
+        "action": "BUY",
+        "entry_min": 5000.0,
+        "entry_max": 5100.0,
+        "stop_loss": 4900.0,
+        "targets": [5200.0],
+        "allocation_pct": None,
+        "confidence": 0.80,
+        "reasoning": "Commodity play",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_openrouter_response(signal_json)
+
+    result = await extract_trade(
+        "Buy GOLDPETAL above 5000",
+        context_messages=[],
+        api_key="test_key",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
+        http_client=client,
+    )
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_normalizes_null_targets():
+    signal_json = json.dumps({
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "action": "BUY",
+        "entry_min": 1482.0,
+        "entry_max": 1490.0,
+        "stop_loss": 1455.0,
+        "targets": None,
+        "allocation_pct": None,
+        "confidence": 0.87,
+        "reasoning": "Strong setup",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_openrouter_response(signal_json)
+
+    result = await extract_trade(
+        "Buy RELIANCE above 1480",
+        context_messages=[],
+        api_key="test_key",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
+        http_client=client,
+    )
+    assert result is not None
+    assert result["targets"] == []
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_filters_invalid_targets():
+    signal_json = json.dumps({
+        "symbol": "RELIANCE",
+        "exchange": "NSE",
+        "action": "BUY",
+        "entry_min": 1482.0,
+        "entry_max": 1490.0,
+        "stop_loss": 1455.0,
+        "targets": [-1, 1500, 99999999],
+        "allocation_pct": None,
+        "confidence": 0.87,
+        "reasoning": "Strong setup",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_openrouter_response(signal_json)
+
+    result = await extract_trade(
+        "Buy RELIANCE above 1480",
+        context_messages=[],
+        api_key="test_key",
+        model="nvidia/nemotron-3-super-120b-a12b:free",
+        http_client=client,
+    )
+    assert result is not None
+    assert result["targets"] == [1500]

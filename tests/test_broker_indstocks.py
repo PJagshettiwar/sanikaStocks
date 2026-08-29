@@ -89,3 +89,37 @@ async def test_403_triggers_reauth_and_retry():
     assert balance == 50000
     assert client.request.call_count == 2
     client.post.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_get_instruments_parses_csv():
+    csv_content = "TRADING_SYMBOL,SECURITY_ID,OTHER\nRELIANCE,2885,x\nINFY,5678,y\n"
+    mock_response = httpx.Response(
+        200, text=csv_content,
+        request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    instruments = await broker.get_instruments()
+
+    assert instruments["RELIANCE"] == "2885"
+    assert instruments["INFY"] == "5678"
+
+
+@pytest.mark.asyncio
+async def test_get_instruments_caches_result():
+    csv_content = "TRADING_SYMBOL,SECURITY_ID,OTHER\nRELIANCE,2885,x\n"
+    mock_response = httpx.Response(
+        200, text=csv_content,
+        request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    await broker.get_instruments()
+    await broker.get_instruments()
+
+    assert client.request.call_count == 1

@@ -25,6 +25,8 @@ class INDstocksBroker(BrokerInterface):
         self._client = http_client or httpx.AsyncClient(timeout=30)
         self._headers = {"Authorization": token, "Content-Type": "application/json"}
         self._instrument_cache: dict[str, str] = {}
+        self._instrument_cache_time: float = 0
+        self._instrument_cache_ttl: float = 86400
         self._last_quote_time: float = 0
         self._quote_interval: float = 0.5
 
@@ -56,7 +58,7 @@ class INDstocksBroker(BrokerInterface):
         return resp
 
     async def get_instruments(self) -> dict[str, str]:
-        if self._instrument_cache:
+        if self._instrument_cache and (time.monotonic() - self._instrument_cache_time) < self._instrument_cache_ttl:
             return self._instrument_cache
         resp = await self._request("GET", f"{BASE_URL}/market/instruments", params={"source": "equity"})
         reader = csv.DictReader(io.StringIO(resp.text))
@@ -65,6 +67,7 @@ class INDstocksBroker(BrokerInterface):
             sec_id = row.get("SECURITY_ID", "").strip()
             if symbol and sec_id:
                 self._instrument_cache[symbol] = sec_id
+        self._instrument_cache_time = time.monotonic()
         return self._instrument_cache
 
     async def get_balance(self) -> float:

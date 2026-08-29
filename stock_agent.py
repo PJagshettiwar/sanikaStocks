@@ -68,9 +68,11 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
     data = resp.json()
     usage = data.get("usage", {})
 
+    cost = usage.get("cost", 0) or float(resp.headers.get("x-cost", 0))
+
     _cost_tracker["calls"] += 1
     _cost_tracker["total_tokens"] += usage.get("total_tokens", 0)
-    _cost_tracker["cost_usd"] += usage.get("cost", 0)
+    _cost_tracker["cost_usd"] += cost
 
     conn = _cost_tracker["db_conn"]
     if conn:
@@ -80,7 +82,7 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
-            cost_usd=usage.get("cost", 0),
+            cost_usd=cost,
             context=context,
         )
 
@@ -120,6 +122,9 @@ async def extract_trade(text, context_messages, api_key, model, http_client):
     if result.get("action") not in ("BUY", "SELL"):
         log.warning("LLM returned invalid action: %s", result.get("action"))
         return None
+    if result.get("exchange") not in ("NSE", "BSE"):
+        log.warning("LLM returned invalid exchange: %s", result.get("exchange"))
+        return None
     if not isinstance(result.get("entry_min"), (int, float)) or result["entry_min"] <= 0:
         log.warning("LLM returned invalid entry_min: %s", result.get("entry_min"))
         return None
@@ -132,6 +137,11 @@ async def extract_trade(text, context_messages, api_key, model, http_client):
     if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
         log.warning("LLM returned invalid confidence: %s", confidence)
         return None
+    targets = result.get("targets", [])
+    if not isinstance(targets, list):
+        result["targets"] = []
+    else:
+        result["targets"] = [t for t in targets if isinstance(t, (int, float)) and 0 < t < 1_000_000]
     return result
 
 
