@@ -244,3 +244,69 @@ Tests use `asyncio_mode = auto` (configured in `pytest.ini`).
 - `analyze_messages.py`: run LLM pipeline on unprocessed messages
 - `test_approval_local.py`: review signals and approve/reject from terminal
 - `test_ticker_search.py`: resolve symbols against broker instruments
+
+## Cloud Deployment (Oracle Cloud Free Tier)
+
+This project is designed to run on Oracle Cloud's **always-free tier** at **$0/month**.
+
+### Infrastructure (Terraform)
+
+All cloud resources are managed as code in the `infra/` directory.
+
+| Resource | Free Tier Allocation | This Project Uses |
+|----------|---------------------|-------------------|
+| Compute (A1.Flex ARM) | 4 OCPU + 24 GB RAM | 1 OCPU + 6 GB RAM |
+| Boot Volume | 200 GB | 50 GB |
+| Network (VCN, subnet, gateway) | Unlimited | 1 VCN |
+| Reserved Public IP | 1 | 1 (for broker API whitelisting) |
+| Boot Volume Backups | 5 slots | Weekly (silver policy) |
+| Outbound Bandwidth | 10 TB/month | Minimal |
+
+### Deploy from scratch
+
+```bash
+cd infra
+cp terraform.tfvars.example terraform.tfvars
+# Edit terraform.tfvars with your OCI credentials and home IP
+
+terraform init
+terraform plan
+terraform apply
+```
+
+### First run on the VM
+
+```bash
+# 1. SSH in (command printed by terraform output)
+ssh -i ~/.ssh/oracle_cloud ubuntu@<INSTANCE_IP>
+
+# 2. Create .env
+sudo -u stockagent nano /opt/stock-agent/.env
+
+# 3. Copy session files from your local machine
+scp -i ~/.ssh/oracle_cloud stock_agent.session approval_bot.session ubuntu@<INSTANCE_IP>:/opt/stock-agent/
+
+# 4. Start the service
+sudo systemctl start stock-agent
+
+# 5. Verify
+sudo systemctl status stock-agent
+docker compose -f /opt/stock-agent/docker-compose.yml logs -f
+```
+
+### Update deployment
+
+```bash
+ssh -i ~/.ssh/oracle_cloud ubuntu@<INSTANCE_IP>
+sudo -u stockagent /opt/stock-agent/infra/scripts/deploy.sh
+```
+
+### Monitoring
+
+A systemd timer runs every 5 minutes and checks:
+- Container is running (auto-restarts on failure)
+- CPU usage (alerts if > 80%)
+- Memory usage (alerts if > 85%)
+- Disk usage (alerts if > 80%)
+
+All alerts are sent to Telegram via the existing bot.
