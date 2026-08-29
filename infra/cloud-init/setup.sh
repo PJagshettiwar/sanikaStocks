@@ -87,24 +87,24 @@ if ! docker compose -f /opt/stock-agent/docker-compose.yml ps --status running 2
 fi
 
 # Check CPU (>80%)
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print int($2 + $4)}')
+CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print int($2 + $4)}' || echo 0)
 if [ "$CPU_USAGE" -gt 80 ]; then
   send_alert "⚠️ <b>[$HOSTNAME] High CPU</b>: $${CPU_USAGE}%"
 fi
 
 # Check memory (>85%)
-MEM_USAGE=$(free | awk '/Mem:/ {printf "%d", $3/$2 * 100}')
+MEM_USAGE=$(free | awk '/Mem:/ {printf "%d", $3/$2 * 100}' || echo 0)
 if [ "$MEM_USAGE" -gt 85 ]; then
   send_alert "⚠️ <b>[$HOSTNAME] High Memory</b>: $${MEM_USAGE}%"
 fi
 
 # Check disk (>80%)
-DISK_USAGE=$(df / | awk 'NR==2 {print int($5)}')
+DISK_USAGE=$(df / | awk 'NR==2 {print int($5)}' || echo 0)
 if [ "$DISK_USAGE" -gt 80 ]; then
   send_alert "⚠️ <b>[$HOSTNAME] High Disk</b>: $${DISK_USAGE}%"
 fi
 WATCHDOG
-chmod +x /opt/stock-agent/scripts/health-watchdog.sh
+chmod 700 /opt/stock-agent/scripts/health-watchdog.sh
 chown stockagent:stockagent /opt/stock-agent/scripts/health-watchdog.sh
 
 # Create systemd timer for watchdog (every 5 minutes)
