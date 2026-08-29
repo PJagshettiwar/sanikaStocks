@@ -1,0 +1,145 @@
+import aiosqlite
+import pytest
+
+from db import (
+    init_db,
+    save_message,
+    get_last_message_id,
+    update_last_message_id,
+    get_recent_messages,
+    save_signal,
+    save_trade_candidate,
+    get_pending_candidate,
+    update_candidate_status,
+    save_decision,
+    save_audit_log,
+    has_duplicate_signal,
+)
+
+
+@pytest.fixture
+async def db_conn():
+    conn = await aiosqlite.connect(":memory:")
+    await init_db(conn)
+    yield conn
+    await conn.close()
+
+
+@pytest.mark.asyncio
+async def test_init_db_creates_tables(db_conn):
+    cursor = await db_conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+    )
+    tables = [row[0] for row in await cursor.fetchall()]
+    assert "messages" in tables
+    assert "signals" in tables
+    assert "trade_candidates" in tables
+    assert "decisions" in tables
+    assert "audit_log" in tables
+
+
+@pytest.mark.asyncio
+async def test_save_and_get_message(db_conn):
+    msg_id = await save_message(
+        db_conn, channel_id=123, message_id=456, text="Buy RELIANCE", timestamp="2026-08-28T10:00:00"
+    )
+    assert msg_id is not None
+    last_id = await get_last_message_id(db_conn, channel_id=123)
+    assert last_id == 456
+
+
+@pytest.mark.asyncio
+async def test_save_message_duplicate_returns_existing_id(db_conn):
+    first_id = await save_message(
+        db_conn, channel_id=1, message_id=100, text="First", timestamp="2026-08-28T10:00:00"
+    )
+    second_id = await save_message(
+        db_conn, channel_id=1, message_id=100, text="First", timestamp="2026-08-28T10:00:00"
+    )
+    assert first_id == second_id
+
+
+@pytest.mark.asyncio
+async def test_get_last_message_id_no_messages(db_conn):
+    last_id = await get_last_message_id(db_conn, channel_id=999)
+    assert last_id is None
+
+
+@pytest.mark.asyncio
+async def test_update_last_message_id_is_noop(db_conn):
+    await save_message(db_conn, channel_id=5, message_id=10, text="x", timestamp="2026-08-28T10:00:00")
+    result = await update_last_message_id(db_conn, channel_id=5, message_id=10)
+    assert result is None
+    assert await get_last_message_id(db_conn, channel_id=5) == 10
+
+
+@pytest.mark.asyncio
+async def test_get_recent_messages(db_conn):
+    for i in range(1, 4):
+        await save_message(db_conn, channel_id=7, message_id=i, text=f"msg{i}", timestamp="2026-08-28T10:00:00")
+    recent = await get_recent_messages(db_conn, channel_id=7, limit=2)
+    assert len(recent) == 2
+    assert recent[0]["message_id"] == 3
+    assert recent[1]["message_id"] == 2
+
+
+@pytest.mark.asyncio
+async def test_save_signal_and_trade_candidate_flow(db_conn):
+    message_db_id = await save_message(
+        db_conn, channel_id=1, message_id=1, text="Buy RELIANCE", timestamp="2026-08-28T10:00:00"
+    )
+    signal_id = await save_signal(
+        db_conn,
+        message_db_id,
+        {
+            "symbol": "RELIANCE",
+            "exchange": "NSE",
+            "action": "BUY",
+            "entry_min": 100.0,
+            "entry_max": 105.0,
+            "stop_loss": 90.0,
+            "targets": [110.0, 120.0],
+            "allocation_pct": 10.0,
+            "confidence": 0.8,
+            "reasoning": "strong momentum",
+        },
+    )
+    assert signal_id is not None
+
+    candidate_id = await save_trade_candidate(
+        db_conn,
+        signal_id,
+        symbol="RELIANCE",
+        quantity=10,
+        amount=1000.0,
+        stop_loss=90.0,
+        current_price=102.0,
+        entry_min=100.0,
+        entry_max=105.0,
+    )
+    assert candidate_id is not None
+
+    candidate = await get_pending_candidate(db_conn, candidate_id)
+    assert candidate is not None
+    assert candidate["symbol"] == "RELIANCE"
+    assert candidate["status"] == "pending"
+    assert candidate["channel_id"] == 1
+
+    await update_candidate_status(db_conn, candidate_id, "approved")
+    candidate_after = await get_pending_candidate(db_conn, candidate_id)
+    assert candidate_after is None
+
+    await save_decision(db_conn, candidate_id, "approved", 102.0)
+    await save_audit_log(db_conn, candidate_id, "notify", {"a": 1}, {"b": 2})
+
+    is_dup = await has_duplicate_signal(db_conn, "RELIANCE", channel_id=1, hours=24)
+    assert is_dup is True
+
+    is_dup_other_channel = await has_duplicate_signal(db_conn, "RELIANCE", channel_id=999, hours=24)
+    assert is_dup_other_channel is False
+
+
+@pytest.mark.asyncio
+async def test_get_pending_candidate_missing_returns_none(db_conn):
+    candidate = await get_pending_candidate(db_conn, 9999)
+    assert candidate is None
