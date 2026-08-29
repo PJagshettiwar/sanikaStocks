@@ -1,0 +1,13 @@
+.env
+*.session
+*.session-journal
+agent.db
+.git
+.idea
+__pycache__
+.venv
+.claude
+docs/
+tests/
+scripts/
+*.md

@@ -16,7 +16,7 @@ from db import (
     get_all_pending_candidates, update_candidate_status,
 )
 from telegram_reader import fetch_new_messages
-from stock_agent import analyze_message
+from stock_agent import analyze_message, set_cost_db
 from risk_engine import validate_signal, ValidationResult
 from approval_bot import (
     format_trade_card, send_approval, handle_approval_reply,
@@ -52,9 +52,6 @@ async def poll_channels():
     messages = await fetch_new_messages(user_client, db_conn, config.WATCHED_CHANNELS)
     log.info("Fetched %d new messages", len(messages))
 
-    balance = None
-    held = None
-
     for msg in messages:
         try:
             context = await get_recent_messages(db_conn, msg["channel_id"], limit=5)
@@ -81,11 +78,9 @@ async def poll_channels():
                 log.info("Signal rejected: %s", validation.reason)
                 continue
 
-            if balance is None:
-                balance = await broker.get_balance()
-            if held is None:
-                positions = await broker.get_positions()
-                held = {p.symbol for p in positions}
+            balance = await broker.get_balance()
+            positions = await broker.get_positions()
+            held = {p.symbol for p in positions}
 
             candidate_id = await save_trade_candidate(
                 db_conn, signal_id, validation.symbol, validation.quantity,
@@ -104,6 +99,13 @@ async def poll_channels():
             log.info("Approval sent for candidate #%d: %s", candidate_id, validation.symbol)
         except Exception as e:
             log.error("Error processing message %s: %s", msg.get("message_id"), e)
+            try:
+                await bot_client.send_message(
+                    config.APPROVAL_CHAT_ID,
+                    f"Poll error on msg {msg.get('message_id')}: {type(e).__name__}. Check logs.",
+                )
+            except Exception:
+                pass
 
 
 async def handle_pending_command():
@@ -206,90 +208,106 @@ async def handle_cancel_command(text: str):
 async def main():
     global user_client, bot_client, db_conn, http_client, broker
 
-    db_conn = await aiosqlite.connect("agent.db")
-    await init_db(db_conn)
+    db_conn = None
+    http_client = None
+    try:
+        db_conn = await aiosqlite.connect("agent.db")
+        http_client = httpx.AsyncClient(timeout=30)
+        await init_db(db_conn)
+        set_cost_db(db_conn)
 
-    http_client = httpx.AsyncClient(timeout=30)
-    broker = INDstocksBroker(
-        client_id=config.INDSTOCKS_CLIENT_ID,
-        totp_secret=config.INDSTOCKS_TOTP_SECRET,
-        mpin=config.INDSTOCKS_MPIN,
-        token=config.INDSTOCKS_TOKEN,
-        http_client=http_client,
-    )
-
-    user_client = TelegramClient(
-        config.TELEGRAM_SESSION_NAME,
-        config.TELEGRAM_API_ID,
-        config.TELEGRAM_API_HASH,
-    )
-    await user_client.start()
-    log.info("User client connected")
-
-    bot_client = TelegramClient(
-        "approval_bot",
-        config.TELEGRAM_API_ID,
-        config.TELEGRAM_API_HASH,
-    )
-    await bot_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
-    log.info("Bot client connected")
-
-    pending_count = await load_pending_from_db(db_conn)
-    log.info("Loaded %d pending candidates from DB", pending_count)
-
-    if pending_count > 0:
-        await bot_client.send_message(
-            config.APPROVAL_CHAT_ID,
-            f"Bot restarted. {pending_count} pending trade(s) awaiting approval.\nSend /pending to review them.",
+        broker = INDstocksBroker(
+            client_id=config.INDSTOCKS_CLIENT_ID,
+            totp_secret=config.INDSTOCKS_TOTP_SECRET,
+            mpin=config.INDSTOCKS_MPIN,
+            token=config.INDSTOCKS_TOKEN,
+            http_client=http_client,
         )
 
-    @bot_client.on(events.NewMessage(chats=config.APPROVAL_CHAT_ID))
-    async def on_message(event):
-        text = (event.text or "").strip()
+        user_client = TelegramClient(
+            config.TELEGRAM_SESSION_NAME,
+            config.TELEGRAM_API_ID,
+            config.TELEGRAM_API_HASH,
+        )
+        await user_client.start()
+        log.info("User client connected")
 
-        if text == "/pending":
-            await handle_pending_command()
-            return
-        if text == "/status":
-            await handle_status_command()
-            return
-        if text.startswith("/cancel"):
-            await handle_cancel_command(text)
-            return
-        if text == "/help":
-            await bot_client.send_message(config.APPROVAL_CHAT_ID, HELP_TEXT)
-            return
+        bot_client = TelegramClient(
+            "approval_bot",
+            config.TELEGRAM_API_ID,
+            config.TELEGRAM_API_HASH,
+        )
+        await bot_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
+        log.info("Bot client connected")
 
-        if not event.reply_to:
-            return
+        pending_count = await load_pending_from_db(db_conn)
+        log.info("Loaded %d pending candidates from DB", pending_count)
 
-        reply_to_msg_id = event.reply_to.reply_to_msg_id
-        candidate_id = get_candidate_for_msg(reply_to_msg_id)
-        if candidate_id is None:
-            return
-
-        if parse_approval_reply(text) is None:
+        if pending_count > 0:
             await bot_client.send_message(
                 config.APPROVAL_CHAT_ID,
-                "Reply A to approve, R to reject.",
+                f"Bot restarted. {pending_count} pending trade(s) awaiting approval.\nSend /pending to review them.",
             )
-            return
 
-        status = await handle_approval_reply(
-            text, candidate_id, broker, db_conn,
-            bot_client, config.APPROVAL_CHAT_ID,
-        )
-        log.info("Approval reply for #%d: %s", candidate_id, status)
+        bot_me = await bot_client.get_me()
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(poll_channels, "interval", minutes=config.POLL_INTERVAL_MINUTES)
-    scheduler.start()
-    log.info("Scheduler started (every %d min)", config.POLL_INTERVAL_MINUTES)
+        @bot_client.on(events.NewMessage(chats=config.APPROVAL_CHAT_ID))
+        async def on_message(event):
+            if event.sender_id == bot_me.id:
+                return
 
-    await poll_channels()
+            text = (event.text or "").strip()
 
-    log.info("Listening for approval replies...")
-    await bot_client.run_until_disconnected()
+            if text == "/pending":
+                await handle_pending_command()
+                return
+            if text == "/status":
+                await handle_status_command()
+                return
+            if text.startswith("/cancel"):
+                await handle_cancel_command(text)
+                return
+            if text == "/help":
+                await bot_client.send_message(config.APPROVAL_CHAT_ID, HELP_TEXT)
+                return
+
+            if not event.reply_to:
+                return
+
+            reply_to_msg_id = event.reply_to.reply_to_msg_id
+            candidate_id = get_candidate_for_msg(reply_to_msg_id)
+            if candidate_id is None:
+                return
+
+            if parse_approval_reply(text) is None:
+                await bot_client.send_message(
+                    config.APPROVAL_CHAT_ID,
+                    "Reply A to approve, R to reject.",
+                )
+                return
+
+            status = await handle_approval_reply(
+                text, candidate_id, broker, db_conn,
+                bot_client, config.APPROVAL_CHAT_ID,
+            )
+            log.info("Approval reply for #%d: %s", candidate_id, status)
+
+        scheduler = AsyncIOScheduler()
+        scheduler.add_job(poll_channels, "interval", minutes=config.POLL_INTERVAL_MINUTES)
+        scheduler.add_job(handle_pending_command, "cron", hour=9, minute=15, timezone="Asia/Kolkata")
+        scheduler.start()
+        log.info("Scheduler started (every %d min, morning notify 09:15 IST)", config.POLL_INTERVAL_MINUTES)
+
+        await poll_channels()
+
+        log.info("Listening for approval replies...")
+        await bot_client.run_until_disconnected()
+    finally:
+        if http_client:
+            await http_client.aclose()
+        if db_conn:
+            await db_conn.close()
+        log.info("Connections closed")
 
 
 if __name__ == "__main__":

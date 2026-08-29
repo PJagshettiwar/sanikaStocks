@@ -1,5 +1,7 @@
 from db import save_message, get_last_message_id
 
+MAX_MESSAGE_LENGTH = 1000
+
 
 async def fetch_new_messages(client, conn, channel_ids):
     all_messages = []
@@ -10,11 +12,12 @@ async def fetch_new_messages(client, conn, channel_ids):
         async for message in client.iter_messages(channel_id, min_id=min_id, limit=100):
             if not message.text:
                 continue
+            text = message.text[:MAX_MESSAGE_LENGTH]
             db_id = await save_message(
                 conn,
                 channel_id=channel_id,
                 message_id=message.id,
-                text=message.text,
+                text=text,
                 timestamp=str(message.date),
             )
             if db_id:
@@ -22,7 +25,7 @@ async def fetch_new_messages(client, conn, channel_ids):
                     "db_id": db_id,
                     "channel_id": channel_id,
                     "message_id": message.id,
-                    "text": message.text,
+                    "text": text,
                     "timestamp": str(message.date),
                 })
     return all_messages
