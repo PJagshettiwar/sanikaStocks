@@ -1,12 +1,17 @@
 import json
+import logging
+
 import httpx
+
+log = logging.getLogger("stock_agent")
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 TIER1_SYSTEM_PROMPT = """You are a stock tip detector for Indian stock markets (NSE/BSE).
 Respond ONLY with JSON: {"is_tip": true/false, "confidence": 0.0-1.0}
 A stock tip contains a buy/sell recommendation with a specific stock name and at least one of: entry price, stop-loss, or target.
-General market commentary, news, greetings, or discussion is NOT a tip."""
+General market commentary, news, greetings, or discussion is NOT a tip.
+Messages saying "hold", "continue to hold", "book profits", "book partial profits", or "trail SL" are NOT new tips. Return is_tip: false for these."""
 
 TIER2_SYSTEM_PROMPT = """You are a stock trade signal extractor for Indian markets (NSE/BSE).
 Extract the trade signal from the message and return ONLY valid JSON with this exact structure:
@@ -58,8 +63,7 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
         timeout=30,
     )
     if resp.status_code != 200:
-        import logging
-        logging.error(f"OpenRouter error {resp.status_code}: {resp.text}")
+        log.error("OpenRouter error %d: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     data = resp.json()
     usage = data.get("usage", {})
@@ -84,7 +88,11 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
     content = content.strip()
     if content.startswith("```"):
         content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    return json.loads(content)
+    try:
+        return json.loads(content)
+    except (json.JSONDecodeError, ValueError):
+        log.warning("LLM returned non-JSON (%s, %s): %.200s", model, context, content)
+        return None
 
 
 async def detect_signal(text, api_key, model, http_client):
@@ -108,6 +116,21 @@ async def extract_trade(text, context_messages, api_key, model, http_client):
     if result is None or not isinstance(result, dict):
         return None
     if not result.get("symbol") or result.get("entry_min") is None:
+        return None
+    if result.get("action") not in ("BUY", "SELL"):
+        log.warning("LLM returned invalid action: %s", result.get("action"))
+        return None
+    if not isinstance(result.get("entry_min"), (int, float)) or result["entry_min"] <= 0:
+        log.warning("LLM returned invalid entry_min: %s", result.get("entry_min"))
+        return None
+    if not isinstance(result.get("entry_max"), (int, float)) or result["entry_max"] <= 0:
+        log.warning("LLM returned invalid entry_max: %s", result.get("entry_max"))
+        return None
+    if result["entry_min"] > result["entry_max"]:
+        result["entry_min"], result["entry_max"] = result["entry_max"], result["entry_min"]
+    confidence = result.get("confidence", 0)
+    if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
+        log.warning("LLM returned invalid confidence: %s", confidence)
         return None
     return result
 

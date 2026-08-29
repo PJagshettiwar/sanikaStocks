@@ -1,11 +1,8 @@
 import pytest
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
-from brokers.base import Quote
+from brokers.base import Quote, Position
 from risk_engine import validate_signal, ValidationResult
-
-IST = timezone(timedelta(hours=5, minutes=30))
-_IN_MARKET_HOURS = datetime(2026, 8, 24, 11, 0, tzinfo=IST)  # Monday, 11:00 IST
 
 
 def _make_signal(**overrides):
@@ -40,10 +37,10 @@ def _make_broker(balance=100000, price=1486.0, instruments=None):
 async def test_valid_signal_passes():
     broker = _make_broker()
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+         patch("risk_engine.get_today_trade_count", return_value=0):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
@@ -57,10 +54,9 @@ async def test_valid_signal_passes():
 async def test_unknown_symbol_rejected():
     broker = _make_broker(instruments={})
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
-    with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+    with patch("risk_engine.has_duplicate_signal", return_value=False):
         result = await validate_signal(
             _make_signal(symbol="FAKESTOCK"), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
@@ -74,10 +70,10 @@ async def test_default_stop_loss_applied():
     signal = _make_signal(stop_loss=None)
     broker = _make_broker()
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+         patch("risk_engine.get_today_trade_count", return_value=0):
         result = await validate_signal(
             signal, channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
@@ -90,10 +86,10 @@ async def test_default_stop_loss_applied():
 async def test_insufficient_balance_rejected():
     broker = _make_broker(balance=500)
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+         patch("risk_engine.get_today_trade_count", return_value=0):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
@@ -106,10 +102,9 @@ async def test_insufficient_balance_rejected():
 async def test_duplicate_signal_rejected():
     broker = _make_broker()
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
+    timestamp = datetime.now(timezone.utc).isoformat()
 
-    with patch("risk_engine.has_duplicate_signal", return_value=True), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+    with patch("risk_engine.has_duplicate_signal", return_value=True):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
@@ -122,10 +117,9 @@ async def test_duplicate_signal_rejected():
 async def test_old_signal_rejected():
     broker = _make_broker()
     db_conn = AsyncMock()
-    old_timestamp = (datetime.utcnow() - timedelta(hours=2)).isoformat()
+    old_timestamp = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
 
-    with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=_IN_MARKET_HOURS):
+    with patch("risk_engine.has_duplicate_signal", return_value=False):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=old_timestamp,
@@ -135,34 +129,88 @@ async def test_old_signal_rejected():
 
 
 @pytest.mark.asyncio
-async def test_weekend_signal_rejected():
+async def test_off_hours_signal_still_passes():
+    """H12: Signals are accepted 24/7; market hours enforcement is in approval_bot."""
     broker = _make_broker()
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
-    saturday = datetime(2026, 8, 22, 11, 0, tzinfo=IST)
+    timestamp = datetime.now(timezone.utc).isoformat()
 
     with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=saturday):
+         patch("risk_engine.get_today_trade_count", return_value=0):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
         )
-    assert result.valid is False
-    assert "market" in result.reason.lower()
+    assert result.valid is True
 
 
 @pytest.mark.asyncio
-async def test_after_hours_signal_rejected():
+async def test_timezone_aware_timestamp_does_not_crash():
+    """C2: Telegram sends timezone-aware timestamps. datetime.now(timezone.utc) - aware raises TypeError."""
     broker = _make_broker()
     db_conn = AsyncMock()
-    timestamp = datetime.utcnow().isoformat()
-    after_hours = datetime(2026, 8, 24, 18, 0, tzinfo=IST)  # Monday, 6 PM IST
+    aware_timestamp = datetime.now(timezone.utc).isoformat()
 
     with patch("risk_engine.has_duplicate_signal", return_value=False), \
-         patch("risk_engine._now_ist", return_value=after_hours):
+         patch("risk_engine.get_today_trade_count", return_value=0):
+        result = await validate_signal(
+            _make_signal(), channel_id=123, broker=broker,
+            db_conn=db_conn, message_timestamp=aware_timestamp,
+        )
+    assert result.valid is True
+
+
+@pytest.mark.asyncio
+async def test_daily_trade_limit_rejected():
+    broker = _make_broker()
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    with patch("risk_engine.has_duplicate_signal", return_value=False), \
+         patch("risk_engine.get_today_trade_count", return_value=5):
         result = await validate_signal(
             _make_signal(), channel_id=123, broker=broker,
             db_conn=db_conn, message_timestamp=timestamp,
         )
     assert result.valid is False
-    assert "market" in result.reason.lower()
+    assert "daily" in result.reason.lower() or "limit" in result.reason.lower()
+
+
+@pytest.mark.asyncio
+async def test_sell_signal_uses_held_quantity():
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    with patch("risk_engine.has_duplicate_signal", return_value=False), \
+         patch("risk_engine.get_today_trade_count", return_value=0):
+        result = await validate_signal(
+            _make_signal(action="SELL"), channel_id=123, broker=broker,
+            db_conn=db_conn, message_timestamp=timestamp,
+        )
+    assert result.valid is True
+    assert result.quantity == 10
+    assert result.action == "SELL"
+    broker.get_balance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_sell_signal_no_position_rejected():
+    broker = _make_broker()
+    broker.get_positions.return_value = []
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    with patch("risk_engine.has_duplicate_signal", return_value=False), \
+         patch("risk_engine.get_today_trade_count", return_value=0):
+        result = await validate_signal(
+            _make_signal(action="SELL"), channel_id=123, broker=broker,
+            db_conn=db_conn, message_timestamp=timestamp,
+        )
+    assert result.valid is False
+    assert "no position" in result.reason.lower()
+
+

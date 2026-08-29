@@ -1,6 +1,6 @@
 import aiosqlite
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 async def init_db(conn: aiosqlite.Connection) -> None:
@@ -106,14 +106,9 @@ async def save_message(conn, channel_id, message_id, text, timestamp):
         (channel_id, message_id, text, str(timestamp)),
     )
     await conn.commit()
-    if cursor.lastrowid:
-        return cursor.lastrowid
-    existing = await conn.execute(
-        "SELECT id FROM messages WHERE channel_id = ? AND message_id = ?",
-        (channel_id, message_id),
-    )
-    row = await existing.fetchone()
-    return row[0] if row else None
+    if cursor.rowcount == 0:
+        return None
+    return cursor.lastrowid
 
 
 async def get_last_message_id(conn, channel_id):
@@ -123,10 +118,6 @@ async def get_last_message_id(conn, channel_id):
     )
     row = await cursor.fetchone()
     return row[0] if row and row[0] else None
-
-
-async def update_last_message_id(conn, channel_id, message_id):
-    pass
 
 
 async def get_recent_messages(conn, channel_id, limit=5):
@@ -188,7 +179,7 @@ async def get_pending_candidate(conn, candidate_id):
 
 
 async def update_candidate_status(conn, candidate_id, status, decided_at=None):
-    decided_at = decided_at or datetime.utcnow().isoformat()
+    decided_at = decided_at or datetime.now(timezone.utc).isoformat()
     await conn.execute(
         "UPDATE trade_candidates SET status = ?, decided_at = ? WHERE id = ?",
         (status, decided_at, candidate_id),
@@ -269,6 +260,34 @@ async def close_trade(conn, trade_id, sell_price, sell_order_id=None, sell_charg
     return {"pnl": pnl, "pnl_pct": pnl_pct}
 
 
+async def get_symbol_pnl(conn, symbol):
+    cursor = await conn.execute(
+        """SELECT id FROM trades
+           WHERE symbol = ? AND side = 'BUY' AND status = 'closed'
+           ORDER BY id DESC LIMIT 1""",
+        (symbol,),
+    )
+    anchor = await cursor.fetchone()
+    if not anchor:
+        where_clause = "WHERE symbol = ? AND status = 'closed' AND opened_at > datetime('now', '-1 year')"
+        params = (symbol,)
+    else:
+        where_clause = "WHERE symbol = ? AND status = 'closed' AND id >= ?"
+        params = (symbol, anchor[0])
+
+    cursor = await conn.execute(
+        f"""SELECT COUNT(*) as trade_count,
+                   COALESCE(SUM(pnl), 0) as total_pnl,
+                   COALESCE(SUM(broker_charges + sell_charges), 0) as total_charges
+            FROM trades
+            {where_clause}""",
+        params,
+    )
+    row = await cursor.fetchone()
+    cols = [d[0] for d in cursor.description]
+    return dict(zip(cols, row))
+
+
 async def get_trade_history(conn, limit=50):
     cursor = await conn.execute(
         """SELECT * FROM trades ORDER BY opened_at DESC LIMIT ?""", (limit,)
@@ -280,10 +299,10 @@ async def get_trade_history(conn, limit=50):
 async def get_portfolio_summary(conn):
     cursor = await conn.execute("""
         SELECT
-            COUNT(*) FILTER (WHERE status = 'open') as open_trades,
-            COUNT(*) FILTER (WHERE status = 'closed') as closed_trades,
-            COALESCE(SUM(pnl) FILTER (WHERE status = 'closed'), 0) as total_pnl,
-            COALESCE(SUM(amount) FILTER (WHERE status = 'open'), 0) as invested,
+            SUM(CASE WHEN status = 'open' THEN 1 ELSE 0 END) as open_trades,
+            SUM(CASE WHEN status = 'closed' THEN 1 ELSE 0 END) as closed_trades,
+            COALESCE(SUM(CASE WHEN status = 'closed' THEN pnl ELSE 0 END), 0) as total_pnl,
+            COALESCE(SUM(CASE WHEN status = 'open' THEN amount ELSE 0 END), 0) as invested,
             COALESCE(SUM(broker_charges + sell_charges), 0) as total_charges
         FROM trades
     """)
@@ -319,6 +338,16 @@ async def get_all_pending_candidates(conn):
     )
     cols = [d[0] for d in cursor.description]
     return [dict(zip(cols, row)) for row in await cursor.fetchall()]
+
+
+async def get_today_trade_count(conn):
+    cursor = await conn.execute(
+        """SELECT COUNT(*) FROM trade_candidates
+           WHERE status IN ('approved', 'executed')
+             AND created_at > datetime('now', 'start of day')""",
+    )
+    row = await cursor.fetchone()
+    return row[0]
 
 
 async def has_duplicate_signal(conn, symbol, channel_id, hours=24):

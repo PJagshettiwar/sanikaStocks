@@ -1,6 +1,6 @@
 import pytest
 import httpx
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 from brokers.base import BrokerInterface, Order, Quote, OrderResult
 from brokers.indstocks import INDstocksBroker
 
@@ -58,3 +58,34 @@ async def test_get_quote_returns_quote():
 
     assert quote.price == 1486.0
     assert quote.volume == 3546732
+
+
+@pytest.mark.asyncio
+async def test_403_triggers_reauth_and_retry():
+    """H13: On 403, broker re-authenticates and retries the request."""
+    forbidden = httpx.Response(
+        403, json={"message": "Token expired"},
+        request=httpx.Request("GET", "https://api.indstocks.com/funds"),
+    )
+    success = httpx.Response(
+        200, json={"status": "success", "data": {"available_balance": 50000}},
+        request=httpx.Request("GET", "https://api.indstocks.com/funds"),
+    )
+    auth_response = httpx.Response(
+        200, json={"token": "new_token"},
+        request=httpx.Request("POST", "https://api.indstocks.com/generate/token"),
+    )
+
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(side_effect=[forbidden, success])
+    client.post = AsyncMock(return_value=auth_response)
+
+    broker = INDstocksBroker(
+        client_id="test", totp_secret="JBSWY3DPEHPK3PXP",
+        mpin="1234", token="expired_token", http_client=client,
+    )
+    balance = await broker.get_balance()
+
+    assert balance == 50000
+    assert client.request.call_count == 2
+    client.post.assert_called_once()
