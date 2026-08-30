@@ -2,6 +2,7 @@
 set -euo pipefail
 
 # Cloud-init first-boot provisioning for stock-agent VM
+# NOTE: This file is rendered via Terraform templatefile() — do not run directly.
 
 export DEBIAN_FRONTEND=noninteractive
 
@@ -21,18 +22,28 @@ apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
 # Install git
 apt-get install -y git
 
-# Create system user
-useradd --system --shell /usr/sbin/nologin --create-home stockagent
+# Create system user with pinned UID/GID for reproducibility
+groupadd --system --gid 997 stockagent || true
+useradd --system --uid 997 --gid 997 --shell /usr/sbin/nologin --create-home stockagent || true
 usermod -aG docker stockagent
 
 # Clone repo
 git clone ${repo_url} /opt/stock-agent
 chown -R stockagent:stockagent /opt/stock-agent
 git config --global --add safe.directory /opt/stock-agent
+sudo -u stockagent git config --global --add safe.directory /opt/stock-agent
 
 # Create data directory for persistent files (db, sessions)
 sudo -u stockagent mkdir -p /opt/stock-agent/data
 
+# Write DOCKER_UID/GID env file for systemd and watchdog
+STOCK_UID=$(id -u stockagent)
+STOCK_GID=$(id -g stockagent)
+cat > /opt/stock-agent/.env.docker <<ENVDOCKER
+DOCKER_UID=$STOCK_UID
+DOCKER_GID=$STOCK_GID
+ENVDOCKER
+chown stockagent:stockagent /opt/stock-agent/.env.docker
 
 # Create systemd service for stock-agent container
 cat > /etc/systemd/system/stock-agent.service <<'UNIT'
@@ -46,7 +57,7 @@ Type=oneshot
 RemainAfterExit=yes
 User=stockagent
 WorkingDirectory=/opt/stock-agent
-Environment="DOCKER_UID=%U" "DOCKER_GID=%G"
+EnvironmentFile=/opt/stock-agent/.env.docker
 ExecStart=/usr/bin/docker compose up -d --build
 ExecStop=/usr/bin/docker compose down
 
@@ -60,9 +71,15 @@ cat > /opt/stock-agent/scripts/health-watchdog.sh <<'WATCHDOG'
 #!/bin/bash
 set -euo pipefail
 
-ENV_FILE="/opt/stock-agent/.env"
+APP_DIR="/opt/stock-agent"
+ENV_FILE="$APP_DIR/.env"
 if [ ! -f "$ENV_FILE" ]; then
   exit 0
+fi
+
+# Source DOCKER_UID/GID for docker compose
+if [ -f "$APP_DIR/.env.docker" ]; then
+  export $(cat "$APP_DIR/.env.docker" | xargs)
 fi
 
 BOT_TOKEN="${bot_token}"
@@ -78,11 +95,12 @@ send_alert() {
 }
 
 # Check container
-if ! docker compose -f /opt/stock-agent/docker-compose.yml ps --status running 2>/dev/null | grep -q stock-agent; then
+cd "$APP_DIR"
+if ! docker compose ps --status running 2>/dev/null | grep -q stock-agent; then
   send_alert "⚠️ <b>[$HOSTNAME] Container down</b>%0AAttempting restart..."
-  if docker compose -f /opt/stock-agent/docker-compose.yml up -d 2>/dev/null; then
+  if docker compose up -d 2>/dev/null; then
     sleep 10
-    if docker compose -f /opt/stock-agent/docker-compose.yml ps --status running 2>/dev/null | grep -q stock-agent; then
+    if docker compose ps --status running 2>/dev/null | grep -q stock-agent; then
       send_alert "✅ <b>[$HOSTNAME] Container restarted successfully</b>"
     else
       send_alert "❌ <b>[$HOSTNAME] Container restart FAILED</b>%0AManual intervention required."
@@ -121,6 +139,8 @@ Description=Stock Agent Health Watchdog
 [Service]
 Type=oneshot
 User=stockagent
+WorkingDirectory=/opt/stock-agent
+EnvironmentFile=/opt/stock-agent/.env.docker
 ExecStart=/opt/stock-agent/scripts/health-watchdog.sh
 WDUNIT
 
