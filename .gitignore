@@ -6,3 +6,10 @@ __pycache__/
 agent.db
 .venv/
 .idea/
+
+# Terraform
+infra/.terraform/
+infra/*.tfstate
+infra/*.tfstate.backup
+infra/*.tfvars
+!infra/terraform.tfvars.example
