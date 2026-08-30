@@ -12,6 +12,10 @@ git pull origin main
 echo "==> Ensuring volume-mount files exist..."
 touch agent.db stock_agent.session approval_bot.session
 
+echo "==> Setting container user to match host..."
+export DOCKER_UID=$(id -u)
+export DOCKER_GID=$(id -g)
+
 echo "==> Rebuilding and restarting containers..."
 docker compose down
 docker compose up -d --build
