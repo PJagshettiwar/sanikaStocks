@@ -7,9 +7,12 @@ async def fetch_new_messages(client, conn, channel_ids):
     all_messages = []
     for channel_id in channel_ids:
         last_id = await get_last_message_id(conn, channel_id)
-        min_id = last_id if last_id else 0
+        if last_id:
+            iter_args = dict(min_id=last_id, limit=10, reverse=True)
+        else:
+            iter_args = dict(limit=10)
 
-        async for message in client.iter_messages(channel_id, min_id=min_id, limit=10, reverse=True):
+        async for message in client.iter_messages(channel_id, **iter_args):
             if not message.text:
                 continue
             text = message.text[:MAX_MESSAGE_LENGTH]
