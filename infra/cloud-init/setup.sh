@@ -30,10 +30,8 @@ git clone ${repo_url} /opt/stock-agent
 chown -R stockagent:stockagent /opt/stock-agent
 git config --global --add safe.directory /opt/stock-agent
 
-# Pre-create volume-mount files so Docker doesn't create them as directories
-sudo -u stockagent touch /opt/stock-agent/agent.db
-sudo -u stockagent touch /opt/stock-agent/stock_agent.session
-sudo -u stockagent touch /opt/stock-agent/approval_bot.session
+# Create data directory for persistent files (db, sessions)
+sudo -u stockagent mkdir -p /opt/stock-agent/data
 
 
 # Create systemd service for stock-agent container

@@ -9,8 +9,8 @@ git config --global --add safe.directory "$APP_DIR"
 echo "==> Pulling latest code..."
 git pull origin main
 
-echo "==> Ensuring volume-mount files exist..."
-touch agent.db stock_agent.session approval_bot.session
+echo "==> Ensuring data directory exists..."
+mkdir -p data
 
 echo "==> Setting container user to match host..."
 export DOCKER_UID=$(id -u)

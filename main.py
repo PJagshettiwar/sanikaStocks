@@ -252,7 +252,7 @@ async def main():
     db_conn = None
     http_client = None
     try:
-        db_conn = await aiosqlite.connect("agent.db")
+        db_conn = await aiosqlite.connect("data/agent.db")
         http_client = httpx.AsyncClient(timeout=30)
         await init_db(db_conn)
         set_cost_db(db_conn)
@@ -275,7 +275,7 @@ async def main():
         log.info("User client connected")
 
         bot_client = TelegramClient(
-            "approval_bot",
+            "data/approval_bot",
             config.TELEGRAM_API_ID,
             config.TELEGRAM_API_HASH,
         )
