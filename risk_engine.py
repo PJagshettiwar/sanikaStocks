@@ -86,7 +86,11 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
     else:
         quantity = math.floor(FIXED_ALLOCATION_AMOUNT / entry_max)
         if quantity < 1:
-            return _fail(f"Price too high for allocation: {entry_max:,.0f} > {FIXED_ALLOCATION_AMOUNT:,.0f}")
+            max_single_share = FIXED_ALLOCATION_AMOUNT * 2
+            if entry_max <= max_single_share:
+                quantity = 1
+            else:
+                return _fail(f"Price too high: {entry_max:,.0f} > {max_single_share:,.0f}")
         amount = round(quantity * entry_max, 2)
 
     return ValidationResult(
