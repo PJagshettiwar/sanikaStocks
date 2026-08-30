@@ -315,13 +315,19 @@ async def main():
         await bot_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
         log.info("Bot client connected")
 
+        await bot_client.send_message(
+            config.APPROVAL_CHAT_ID,
+            "Stock agent started. Send /status for health check.",
+        )
+        log.info("Startup notification sent to Telegram")
+
         pending_count = await load_pending_from_db(db_conn)
         log.info("Loaded %d pending candidates from DB", pending_count)
 
         if pending_count > 0:
             await bot_client.send_message(
                 config.APPROVAL_CHAT_ID,
-                f"Bot restarted. {pending_count} pending trade(s) awaiting approval.\nSend /pending to review them.",
+                f"{pending_count} pending trade(s) awaiting approval.\nSend /pending to review them.",
             )
 
         bot_me = await bot_client.get_me()
