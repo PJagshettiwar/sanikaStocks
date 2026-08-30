@@ -29,21 +29,23 @@ sudo -u stockagent git config --global --add safe.directory "$APP_DIR"
 sudo -u stockagent git pull origin main
 
 echo "==> Building and starting containers..."
-sudo -u stockagent docker compose up -d --build
+export DOCKER_UID=$(id -u stockagent)
+export DOCKER_GID=$(id -g stockagent)
+sudo -E -u stockagent DOCKER_UID=$DOCKER_UID DOCKER_GID=$DOCKER_GID docker compose up -d --build
 
 echo "==> Waiting for container to start..."
 sleep 8
 
 echo "==> Checking status..."
-if sudo -u stockagent docker compose ps --status running 2>/dev/null | grep -q stock-agent; then
+if sudo -u stockagent DOCKER_UID=$DOCKER_UID DOCKER_GID=$DOCKER_GID docker compose ps --status running 2>/dev/null | grep -q stock-agent; then
   echo "SUCCESS: Container is running."
   echo ""
   echo "==> Recent logs:"
-  sudo -u stockagent docker compose logs --tail 20
+  sudo -u stockagent DOCKER_UID=$DOCKER_UID DOCKER_GID=$DOCKER_GID docker compose logs --tail 20
 else
   echo "FAILED: Container is not running."
   echo ""
   echo "==> Error logs:"
-  sudo -u stockagent docker compose logs --tail 30
+  sudo -u stockagent DOCKER_UID=$DOCKER_UID DOCKER_GID=$DOCKER_GID docker compose logs --tail 30
   exit 1
 fi

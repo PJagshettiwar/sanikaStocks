@@ -35,6 +35,7 @@ sudo -u stockagent touch /opt/stock-agent/agent.db
 sudo -u stockagent touch /opt/stock-agent/stock_agent.session
 sudo -u stockagent touch /opt/stock-agent/approval_bot.session
 
+
 # Create systemd service for stock-agent container
 cat > /etc/systemd/system/stock-agent.service <<'UNIT'
 [Unit]
@@ -47,6 +48,7 @@ Type=oneshot
 RemainAfterExit=yes
 User=stockagent
 WorkingDirectory=/opt/stock-agent
+Environment="DOCKER_UID=%U" "DOCKER_GID=%G"
 ExecStart=/usr/bin/docker compose up -d --build
 ExecStop=/usr/bin/docker compose down
 
