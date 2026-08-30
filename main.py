@@ -55,6 +55,9 @@ HELP_TEXT = (
 
 async def poll_channels():
     global last_poll_at, last_poll_message_count
+    if user_client is None:
+        log.warning("Skipping poll: user client not connected")
+        return
     log.info("Polling %d channels...", len(config.WATCHED_CHANNELS))
 
     messages = await fetch_new_messages(user_client, db_conn, config.WATCHED_CHANNELS)
@@ -299,14 +302,6 @@ async def main():
                     raise
                 await asyncio.sleep(delay)
 
-        user_client = TelegramClient(
-            config.TELEGRAM_SESSION_NAME,
-            config.TELEGRAM_API_ID,
-            config.TELEGRAM_API_HASH,
-        )
-        await user_client.start()
-        log.info("User client connected")
-
         bot_client = TelegramClient(
             "data/approval_bot",
             config.TELEGRAM_API_ID,
@@ -320,6 +315,23 @@ async def main():
             "Stock agent started. Send /status for health check.",
         )
         log.info("Startup notification sent to Telegram")
+
+        try:
+            user_client = TelegramClient(
+                config.TELEGRAM_SESSION_NAME,
+                config.TELEGRAM_API_ID,
+                config.TELEGRAM_API_HASH,
+            )
+            await user_client.start()
+            log.info("User client connected")
+        except EOFError:
+            log.error("Telegram user session missing or expired. Channel polling disabled.")
+            await bot_client.send_message(
+                config.APPROVAL_CHAT_ID,
+                "WARNING: Telegram user session invalid. Channel polling disabled.\n"
+                "Run session setup script on server to fix.",
+            )
+            user_client = None
 
         pending_count = await load_pending_from_db(db_conn)
         log.info("Loaded %d pending candidates from DB", pending_count)
