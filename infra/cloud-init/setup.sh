@@ -28,6 +28,12 @@ usermod -aG docker stockagent
 # Clone repo
 git clone ${repo_url} /opt/stock-agent
 chown -R stockagent:stockagent /opt/stock-agent
+git config --global --add safe.directory /opt/stock-agent
+
+# Pre-create volume-mount files so Docker doesn't create them as directories
+sudo -u stockagent touch /opt/stock-agent/agent.db
+sudo -u stockagent touch /opt/stock-agent/stock_agent.session
+sudo -u stockagent touch /opt/stock-agent/approval_bot.session
 
 # Create systemd service for stock-agent container
 cat > /etc/systemd/system/stock-agent.service <<'UNIT'
