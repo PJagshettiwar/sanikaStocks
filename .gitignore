@@ -4,6 +4,7 @@ __pycache__/
 *.session
 *.session-journal
 agent.db
+data/
 .venv/
 .idea/
 

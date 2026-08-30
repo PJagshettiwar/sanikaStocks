@@ -4,7 +4,5 @@ services:
     env_file: .env
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     volumes:
-      - ./agent.db:/app/agent.db
-      - ./stock_agent.session:/app/stock_agent.session
-      - ./approval_bot.session:/app/approval_bot.session
+      - ./data:/app/data
     restart: unless-stopped
