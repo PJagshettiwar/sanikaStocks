@@ -262,9 +262,19 @@ async def main():
             client_id=config.INDSTOCKS_CLIENT_ID,
             totp_secret=config.INDSTOCKS_TOTP_SECRET,
             mpin=config.INDSTOCKS_MPIN,
+            token=config.INDSTOCKS_TOKEN,
             http_client=http_client,
         )
-        await broker.authenticate()
+        for attempt in range(5):
+            try:
+                await broker.authenticate()
+                break
+            except Exception as e:
+                delay = min(15 * (2 ** attempt), 300)
+                log.warning("Broker auth failed (attempt %d/5): %s. Retrying in %ds", attempt + 1, e, delay)
+                if attempt == 4:
+                    raise
+                await asyncio.sleep(delay)
 
         user_client = TelegramClient(
             config.TELEGRAM_SESSION_NAME,

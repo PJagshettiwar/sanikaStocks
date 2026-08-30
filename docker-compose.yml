@@ -5,4 +5,9 @@ services:
     user: "${DOCKER_UID:-1000}:${DOCKER_GID:-1000}"
     volumes:
       - ./data:/app/data
-    restart: unless-stopped
+    restart: on-failure:3
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

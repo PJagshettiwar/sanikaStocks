@@ -11,4 +11,5 @@ __pycache__
 docs/
 tests/
 scripts/
+infra/
 *.md
