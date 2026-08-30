@@ -5,4 +5,5 @@ services:
     volumes:
       - ./agent.db:/app/agent.db
       - ./stock_agent.session:/app/stock_agent.session
+      - ./approval_bot.session:/app/approval_bot.session
     restart: unless-stopped
