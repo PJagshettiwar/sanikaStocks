@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import math
+import os
 from datetime import datetime, timezone
 
 import aiosqlite
@@ -25,7 +26,7 @@ from approval_bot import (
     load_pending_from_db, get_candidate_for_msg, parse_approval_reply,
     _remove_pending,
 )
-from brokers.indstocks import INDstocksBroker
+from brokers.indstocks import INDstocksBroker, RateLimitError
 
 logging.basicConfig(
     level=logging.INFO,
@@ -258,21 +259,43 @@ async def main():
         set_cost_db(db_conn)
         await cleanup_old_audit_logs(db_conn)
 
+        cooldown_file = "data/.auth_cooldown"
+        if os.path.exists(cooldown_file):
+            try:
+                with open(cooldown_file) as f:
+                    cooldown_ts = float(f.read().strip())
+                age = datetime.now(timezone.utc).timestamp() - cooldown_ts
+                if age < 1800:
+                    log.error("Auth cooldown active (%.0fs remaining). Exiting cleanly.", 1800 - age)
+                    return
+            except (ValueError, OSError):
+                pass
+            try:
+                os.remove(cooldown_file)
+            except OSError:
+                pass
+
         broker = INDstocksBroker(
             client_id=config.INDSTOCKS_CLIENT_ID,
             totp_secret=config.INDSTOCKS_TOTP_SECRET,
             mpin=config.INDSTOCKS_MPIN,
-            token=config.INDSTOCKS_TOKEN,
             http_client=http_client,
         )
-        for attempt in range(5):
+        max_auth_attempts = 3
+        for attempt in range(max_auth_attempts):
             try:
                 await broker.authenticate()
                 break
+            except RateLimitError as e:
+                log.warning("Broker rate limited: %s. Writing cooldown marker.", e)
+                with open(cooldown_file, "w") as f:
+                    f.write(str(datetime.now(timezone.utc).timestamp()))
+                return
             except Exception as e:
-                delay = min(15 * (2 ** attempt), 300)
-                log.warning("Broker auth failed (attempt %d/5): %s. Retrying in %ds", attempt + 1, e, delay)
-                if attempt == 4:
+                delay = min(30 * (2 ** attempt), 120)
+                log.warning("Broker auth failed (attempt %d/%d): %s. Retrying in %ds",
+                            attempt + 1, max_auth_attempts, e, delay)
+                if attempt == max_auth_attempts - 1:
                     raise
                 await asyncio.sleep(delay)
 

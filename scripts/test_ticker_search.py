@@ -15,7 +15,13 @@ SYMBOLS_FROM_LLM = ["AMBER", "HINDCOPPER", "POLICYBZR", "NH", "HDFCAMC", "KMSUGA
 
 async def main():
     async with httpx.AsyncClient() as http:
-        broker = INDstocksBroker(os.environ["INDSTOCKS_TOKEN"], http)
+        broker = INDstocksBroker(
+            client_id=os.environ["INDSTOCKS_CLIENT_ID"],
+            totp_secret=os.environ["INDSTOCKS_TOTP_SECRET"],
+            mpin=os.environ["INDSTOCKS_MPIN"],
+            http_client=http,
+        )
+        await broker.authenticate()
         instruments = await broker.get_instruments()
         print(f"Loaded {len(instruments)} instruments from INDstocks\n")
 

@@ -2,7 +2,7 @@ import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
 from brokers.base import BrokerInterface, Order, Quote, OrderResult
-from brokers.indstocks import INDstocksBroker
+from brokers.indstocks import INDstocksBroker, RateLimitError
 
 
 def test_indstocks_implements_interface():
@@ -19,7 +19,9 @@ async def test_place_order_sends_correct_payload():
     client = AsyncMock(spec=httpx.AsyncClient)
     client.request = AsyncMock(return_value=mock_response)
 
-    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
     order = Order(
         symbol="RELIANCE",
         exchange="NSE",
@@ -52,7 +54,9 @@ async def test_get_quote_returns_quote():
     client = AsyncMock(spec=httpx.AsyncClient)
     client.request = AsyncMock(return_value=mock_response)
 
-    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
     broker._instrument_cache = {"RELIANCE": "2885"}
     quote = await broker.get_quote("RELIANCE", "NSE")
 
@@ -82,8 +86,10 @@ async def test_403_triggers_reauth_and_retry():
 
     broker = INDstocksBroker(
         client_id="test", totp_secret="JBSWY3DPEHPK3PXP",
-        mpin="1234", token="expired_token", http_client=client,
+        mpin="1234", http_client=client,
     )
+    broker._token = "expired_token"
+    broker._headers["Authorization"] = "expired_token"
     balance = await broker.get_balance()
 
     assert balance == 50000
@@ -101,7 +107,9 @@ async def test_get_instruments_parses_csv():
     client = AsyncMock(spec=httpx.AsyncClient)
     client.request = AsyncMock(return_value=mock_response)
 
-    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
     instruments = await broker.get_instruments()
 
     assert instruments["RELIANCE"] == "2885"
@@ -118,8 +126,72 @@ async def test_get_instruments_caches_result():
     client = AsyncMock(spec=httpx.AsyncClient)
     client.request = AsyncMock(return_value=mock_response)
 
-    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", token="test_token", http_client=client)
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
     await broker.get_instruments()
     await broker.get_instruments()
 
     assert client.request.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_authenticate_429_raises_rate_limit_error():
+    rate_limited = httpx.Response(
+        429, json={"message": "Too Many Requests"},
+        headers={"Retry-After": "60"},
+        request=httpx.Request("POST", "https://api.indstocks.com/generate/token"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post = AsyncMock(return_value=rate_limited)
+
+    broker = INDstocksBroker(
+        client_id="test", totp_secret="JBSWY3DPEHPK3PXP",
+        mpin="1234", http_client=client,
+    )
+    with pytest.raises(RateLimitError) as exc_info:
+        await broker.authenticate()
+    assert exc_info.value.retry_after == 60.0
+
+
+@pytest.mark.asyncio
+async def test_authenticate_429_blocks_subsequent_calls():
+    rate_limited = httpx.Response(
+        429, json={"message": "Too Many Requests"},
+        request=httpx.Request("POST", "https://api.indstocks.com/generate/token"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post = AsyncMock(return_value=rate_limited)
+
+    broker = INDstocksBroker(
+        client_id="test", totp_secret="JBSWY3DPEHPK3PXP",
+        mpin="1234", http_client=client,
+    )
+    with pytest.raises(RateLimitError):
+        await broker.authenticate()
+
+    # Second call should be blocked without hitting the API
+    with pytest.raises(RateLimitError):
+        await broker.authenticate()
+    assert client.post.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_request_429_raises_rate_limit_error():
+    rate_limited = httpx.Response(
+        429, json={"message": "Too Many Requests"},
+        headers={"Retry-After": "30"},
+        request=httpx.Request("GET", "https://api.indstocks.com/funds"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=rate_limited)
+
+    broker = INDstocksBroker(
+        client_id="test", totp_secret="test",
+        mpin="test", http_client=client,
+    )
+    broker._token = "valid_token"
+    broker._headers["Authorization"] = "valid_token"
+    with pytest.raises(RateLimitError) as exc_info:
+        await broker.get_balance()
+    assert exc_info.value.retry_after == 30.0
