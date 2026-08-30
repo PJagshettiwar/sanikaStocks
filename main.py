@@ -111,11 +111,12 @@ async def poll_channels():
             await send_approval(bot_client, config.APPROVAL_CHAT_ID, candidate_id, card, db_conn)
             log.info("Approval sent for candidate #%d: %s", candidate_id, validation.symbol)
         except Exception as e:
-            log.error("Error processing message %s: %s", msg.get("message_id"), e)
+            log.error("Error processing message %s: %s", msg.get("message_id"), e, exc_info=True)
+            reason = str(e)[:200]
             try:
                 await bot_client.send_message(
                     config.APPROVAL_CHAT_ID,
-                    f"Poll error on msg {msg.get('message_id')}: {type(e).__name__}. Check logs.",
+                    f"Poll error on msg {msg.get('message_id')}:\n{reason}",
                 )
             except Exception:
                 pass
