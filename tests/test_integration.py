@@ -88,14 +88,14 @@ def _make_bot():
     return bot
 
 
-def _mock_openrouter_response(content):
+def _mock_llm_response(content):
     return httpx.Response(
         200,
         json={
             "choices": [{"message": {"content": content}}],
             "usage": {"total_tokens": 10},
         },
-        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+        request=httpx.Request("POST", "https://example.com/chat/completions"),
     )
 
 
@@ -242,10 +242,10 @@ async def test_exchange_validation_rejects_invalid():
         "targets": [51000.0], "confidence": 0.85, "reasoning": "gold bullish",
     })
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.return_value = _mock_openrouter_response(llm_response)
+    client.post.return_value = _mock_llm_response(llm_response)
 
     result = await extract_trade(
-        "Buy GOLD above 50000", context_messages=[], api_key="k",
+        "Buy GOLD above 50000", context_messages=[],
         model="test-model", http_client=client,
     )
     assert result is None
@@ -264,20 +264,20 @@ async def test_targets_validation_normalizes():
     }
 
     null_targets = {**base, "targets": None}
-    client.post.return_value = _mock_openrouter_response(json.dumps(null_targets))
-    r = await extract_trade("Buy RELIANCE", [], "k", "m", client)
+    client.post.return_value = _mock_llm_response(json.dumps(null_targets))
+    r = await extract_trade("Buy RELIANCE", [], "m", client)
     assert r is not None
     assert r["targets"] == []
 
     none_str_targets = {**base, "targets": "none"}
-    client.post.return_value = _mock_openrouter_response(json.dumps(none_str_targets))
-    r = await extract_trade("Buy RELIANCE", [], "k", "m", client)
+    client.post.return_value = _mock_llm_response(json.dumps(none_str_targets))
+    r = await extract_trade("Buy RELIANCE", [], "m", client)
     assert r is not None
     assert r["targets"] == []
 
     mixed_targets = {**base, "targets": [-1, 1500, 99999999]}
-    client.post.return_value = _mock_openrouter_response(json.dumps(mixed_targets))
-    r = await extract_trade("Buy RELIANCE", [], "k", "m", client)
+    client.post.return_value = _mock_llm_response(json.dumps(mixed_targets))
+    r = await extract_trade("Buy RELIANCE", [], "m", client)
     assert r is not None
     assert -1 not in r["targets"]
     assert 99999999 not in r["targets"]
@@ -421,9 +421,9 @@ async def test_cost_tracker_reset_between_tests():
     assert _cost_tracker["total_tokens"] == 0
 
     client = AsyncMock(spec=httpx.AsyncClient)
-    client.post.return_value = _mock_openrouter_response('{"is_tip": true, "confidence": 0.9}')
+    client.post.return_value = _mock_llm_response('{"is_tip": true, "confidence": 0.9}')
 
-    await detect_signal("Buy RELIANCE", "k", "m", client)
+    await detect_signal("Buy RELIANCE", "m", client)
 
     assert _cost_tracker["calls"] == 1
     assert _cost_tracker["total_tokens"] == 10
@@ -432,14 +432,16 @@ async def test_cost_tracker_reset_between_tests():
 # ---- R2-M9: HTTP error from openrouter ----
 
 @pytest.mark.asyncio
-async def test_http_error_from_openrouter():
+async def test_http_error_from_openrouter(monkeypatch):
+    monkeypatch.setattr("stock_agent._BASE_DELAY", 0)
     error_response = httpx.Response(
         429,
         json={"error": "rate limited"},
-        request=httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions"),
+        request=httpx.Request("POST", "https://example.com/chat/completions"),
     )
     client = AsyncMock(spec=httpx.AsyncClient)
     client.post.return_value = error_response
 
     with pytest.raises(httpx.HTTPStatusError):
-        await detect_signal("Buy RELIANCE", "k", "m", client)
+        await detect_signal("Buy RELIANCE", "m", client)
+    assert client.post.call_count == 3
