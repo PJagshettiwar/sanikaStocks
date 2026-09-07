@@ -324,6 +324,8 @@ async def main():
                 config.TELEGRAM_API_HASH,
             )
             await user_client.start()
+            # Bare numeric IDs only resolve if the entity is cached; dialogs populate that cache.
+            await user_client.get_dialogs()
             log.info("User client connected")
         except EOFError:
             log.error("Telegram user session missing or expired. Channel polling disabled.")

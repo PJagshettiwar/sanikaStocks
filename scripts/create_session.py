@@ -11,6 +11,8 @@ async def main():
     api_hash = os.environ["TELEGRAM_API_HASH"]
     session_name = os.getenv("TELEGRAM_SESSION_NAME", "data/stock_agent")
 
+    os.makedirs(os.path.dirname(session_name) or ".", exist_ok=True)
+
     print(f"Creating session: {session_name}.session")
     print("You will be prompted for your phone number and a verification code.\n")
 
