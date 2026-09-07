@@ -15,8 +15,8 @@ LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter")
 if LLM_PROVIDER == "gemini":
     LLM_API_KEY = os.environ["GEMINI_API_KEY"]
     LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
-    TIER1_MODEL = os.getenv("TIER1_MODEL", "gemini-2.0-flash")
-    TIER2_MODEL = os.getenv("TIER2_MODEL", "gemini-2.0-flash")
+    TIER1_MODEL = os.getenv("TIER1_MODEL", "gemini-3.5-flash-lite")
+    TIER2_MODEL = os.getenv("TIER2_MODEL", "gemini-3.6-flash")
 elif LLM_PROVIDER == "openrouter":
     LLM_API_KEY = os.environ["OPENROUTER_API_KEY"]
     LLM_BASE_URL = "https://openrouter.ai/api/v1"
