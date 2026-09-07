@@ -8,9 +8,19 @@ data/
 .venv/
 .idea/
 
+# Security audit: contains VM IP and credential locations, public repo
+docs/SECURITY_AUDIT_*.md
+
 # Terraform
 infra/.terraform/
 infra/*.tfstate
 infra/*.tfstate.backup
 infra/*.tfvars
 !infra/terraform.tfvars.example
+
+# Local Claude Code settings and worktrees
+.claude/
+
+# Contain VM IP and OCI resource IDs, public repo
+infra/DEPLOY_STATUS.md
+infra/scripts/ssh-connect.sh

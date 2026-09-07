@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 
@@ -5,7 +6,7 @@ import httpx
 
 log = logging.getLogger("stock_agent")
 
-OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+from config import LLM_BASE_URL, LLM_API_KEY, LLM_PROVIDER
 
 TIER1_SYSTEM_PROMPT = """You are a stock tip detector for Indian stock markets (NSE/BSE).
 Respond ONLY with JSON: {"is_tip": true/false, "confidence": 0.0-1.0}
@@ -37,6 +38,19 @@ Rules:
 
 CONFIDENCE_THRESHOLD = 0.6
 
+RETRYABLE_STATUSES = {429, 500, 502, 503, 504}
+_MAX_RETRIES = 2
+_BASE_DELAY = 1.0
+_MAX_DELAY = 10.0
+
+
+def _retry_after(resp, fallback: float) -> float:
+    """RFC 9110 allows Retry-After to be an HTTP date, which float() can't parse."""
+    try:
+        return float(resp.headers.get("Retry-After", fallback))
+    except (TypeError, ValueError):
+        return fallback
+
 _cost_tracker = {"calls": 0, "total_tokens": 0, "cost_usd": 0.0, "db_conn": None}
 
 
@@ -52,18 +66,42 @@ def get_session_costs():
     }
 
 
-async def _call_openrouter(messages, api_key, model, http_client, context=None):
-    resp = await http_client.post(
-        OPENROUTER_URL,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        json={"model": model, "messages": messages, "temperature": 0.1},
-        timeout=30,
-    )
+async def _call_llm(messages, model, http_client, context=None):
+    url = f"{LLM_BASE_URL}/chat/completions"
+
+    for attempt in range(_MAX_RETRIES + 1):
+        try:
+            resp = await http_client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {LLM_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={"model": model, "messages": messages, "temperature": 0.1},
+                timeout=30,
+            )
+        except httpx.TransportError as e:
+            if attempt == _MAX_RETRIES:
+                raise
+            delay = _BASE_DELAY * (2 ** attempt)
+            log.warning("LLM request failed (attempt %d/%d): %s. Retrying in %.1fs",
+                        attempt + 1, _MAX_RETRIES + 1, e, delay)
+            await asyncio.sleep(delay)
+            continue
+
+        if resp.status_code in RETRYABLE_STATUSES and attempt < _MAX_RETRIES:
+            delay = _BASE_DELAY * (2 ** attempt)
+            if resp.status_code == 429:
+                delay = min(_retry_after(resp, delay), _MAX_DELAY)
+            log.warning("LLM error %d (attempt %d/%d). Retrying in %.1fs",
+                        resp.status_code, attempt + 1, _MAX_RETRIES + 1, delay)
+            await asyncio.sleep(delay)
+            continue
+
+        break
+
     if resp.status_code != 200:
-        log.error("OpenRouter error %d: %s", resp.status_code, resp.text)
+        log.error("LLM error %d: %s", resp.status_code, resp.text)
     resp.raise_for_status()
     data = resp.json()
     usage = data.get("usage", {})
@@ -78,7 +116,7 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
     if conn:
         from db import save_api_cost
         await save_api_cost(
-            conn, service="openrouter", model=model, endpoint="chat/completions",
+            conn, service=LLM_PROVIDER, model=model, endpoint="chat/completions",
             prompt_tokens=usage.get("prompt_tokens", 0),
             completion_tokens=usage.get("completion_tokens", 0),
             total_tokens=usage.get("total_tokens", 0),
@@ -97,15 +135,15 @@ async def _call_openrouter(messages, api_key, model, http_client, context=None):
         return None
 
 
-async def detect_signal(text, api_key, model, http_client):
+async def detect_signal(text, model, http_client):
     messages = [
         {"role": "system", "content": TIER1_SYSTEM_PROMPT},
         {"role": "user", "content": text},
     ]
-    return await _call_openrouter(messages, api_key, model, http_client, context="tier1_detect")
+    return await _call_llm(messages, model, http_client, context="tier1_detect")
 
 
-async def extract_trade(text, context_messages, api_key, model, http_client):
+async def extract_trade(text, context_messages, model, http_client):
     context_block = ""
     if context_messages:
         context_block = "Recent messages from the same channel for context:\n" + "\n".join(f"- {m}" for m in context_messages) + "\n\n"
@@ -114,7 +152,7 @@ async def extract_trade(text, context_messages, api_key, model, http_client):
         {"role": "system", "content": TIER2_SYSTEM_PROMPT},
         {"role": "user", "content": user_content},
     ]
-    result = await _call_openrouter(messages, api_key, model, http_client, context="tier2_extract")
+    result = await _call_llm(messages, model, http_client, context="tier2_extract")
     if result is None or not isinstance(result, dict):
         return None
     if not result.get("symbol") or result.get("entry_min") is None:
@@ -145,8 +183,8 @@ async def extract_trade(text, context_messages, api_key, model, http_client):
     return result
 
 
-async def analyze_message(text, context_messages, api_key, tier1_model, tier2_model, http_client):
-    detection = await detect_signal(text, api_key, tier1_model, http_client)
+async def analyze_message(text, context_messages, tier1_model, tier2_model, http_client):
+    detection = await detect_signal(text, tier1_model, http_client)
     if not detection or not detection.get("is_tip") or detection.get("confidence", 0) < CONFIDENCE_THRESHOLD:
         return None
-    return await extract_trade(text, context_messages, api_key, tier2_model, http_client)
+    return await extract_trade(text, context_messages, tier2_model, http_client)

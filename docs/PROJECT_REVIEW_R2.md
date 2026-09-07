@@ -26,7 +26,7 @@
 **Module:** `get_channels.py`
 **Lines:** 3-5
 
-`api_id = REDACTED` and `api_hash = "REDACTED"` are hardcoded in plaintext. This file is tracked by git, so the credentials are in version history. Anyone with repo access gets full Telegram API identity.
+`api_id = <redacted>` and `api_hash = "<redacted>"` are hardcoded in plaintext. This file is tracked by git, so the credentials are in version history. Anyone with repo access gets full Telegram API identity.
 
 **Proposed fix:** Delete the hardcoded values. Import from `config.py` (which reads env vars). Rotate the `api_hash` via my.telegram.org since the current value is in git history. Consider adding `get_channels.py` to `.gitignore` or deleting it (it's a one-off utility script).
 

@@ -10,9 +10,20 @@ WATCHED_CHANNELS = [int(c.strip()) for c in os.environ["WATCHED_CHANNELS"].split
 TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 APPROVAL_CHAT_ID = int(os.environ["APPROVAL_CHAT_ID"])
 
-OPENROUTER_API_KEY = os.environ["OPENROUTER_API_KEY"]
-TIER1_MODEL = os.getenv("TIER1_MODEL", "nvidia/nemotron-3.5-lightning:free")
-TIER2_MODEL = os.getenv("TIER2_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "openrouter")
+
+if LLM_PROVIDER == "gemini":
+    LLM_API_KEY = os.environ["GEMINI_API_KEY"]
+    LLM_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
+    TIER1_MODEL = os.getenv("TIER1_MODEL", "gemini-3.5-flash-lite")
+    TIER2_MODEL = os.getenv("TIER2_MODEL", "gemini-3.6-flash")
+elif LLM_PROVIDER == "openrouter":
+    LLM_API_KEY = os.environ["OPENROUTER_API_KEY"]
+    LLM_BASE_URL = "https://openrouter.ai/api/v1"
+    TIER1_MODEL = os.getenv("TIER1_MODEL", "nvidia/nemotron-3.5-lightning:free")
+    TIER2_MODEL = os.getenv("TIER2_MODEL", "nvidia/nemotron-3-super-120b-a12b:free")
+else:
+    raise ValueError(f"LLM_PROVIDER must be 'openrouter' or 'gemini', got {LLM_PROVIDER!r}")
 
 INDSTOCKS_CLIENT_ID = os.environ["INDSTOCKS_CLIENT_ID"]
 INDSTOCKS_TOTP_SECRET = os.environ["INDSTOCKS_TOTP_SECRET"]
