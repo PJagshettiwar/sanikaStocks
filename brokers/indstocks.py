@@ -14,6 +14,18 @@ ALGO_ID_NSE = "99999"
 ALGO_ID_BSE = "9999999999999999"
 log = logging.getLogger(__name__)
 
+RETRYABLE_STATUSES = {500, 502, 503, 504}
+_MAX_RETRIES = 2
+_BASE_DELAY = 1.0
+
+
+def _retry_after(resp, fallback: float) -> float:
+    """RFC 9110 allows Retry-After to be an HTTP date, which float() can't parse."""
+    try:
+        return float(resp.headers.get("Retry-After", fallback))
+    except (TypeError, ValueError):
+        return fallback
+
 
 class RateLimitError(Exception):
     def __init__(self, retry_after: float):
@@ -52,7 +64,7 @@ class INDstocksBroker(BrokerInterface):
             json={"mpin": self._mpin, "totp": totp_code},
         )
         if resp.status_code == 429:
-            retry_after = float(resp.headers.get("Retry-After", self.AUTH_COOLDOWN))
+            retry_after = _retry_after(resp, self.AUTH_COOLDOWN)
             self._auth_blocked_until = time.monotonic() + retry_after
             raise RateLimitError(retry_after)
         resp.raise_for_status()
@@ -66,18 +78,40 @@ class INDstocksBroker(BrokerInterface):
         if not self._token:
             await self.authenticate()
 
-    async def _request(self, method: str, url: str, **kwargs):
+    async def _request(self, method: str, url: str, retry: bool = True, **kwargs):
         await self._ensure_auth()
-        resp = await self._client.request(method, url, headers=self._headers, **kwargs)
-        if resp.status_code == 403:
-            log.info("Token expired, re-authenticating")
-            await self.authenticate()
-            resp = await self._client.request(method, url, headers=self._headers, **kwargs)
-        if resp.status_code == 429:
-            retry_after = float(resp.headers.get("Retry-After", self.AUTH_COOLDOWN))
-            raise RateLimitError(retry_after)
-        resp.raise_for_status()
-        return resp
+        reauthed = False
+
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                resp = await self._client.request(method, url, headers=self._headers, **kwargs)
+            except httpx.TransportError as e:
+                if not retry or attempt == _MAX_RETRIES:
+                    raise
+                delay = _BASE_DELAY * (2 ** attempt)
+                log.warning("Request to %s failed (attempt %d/%d): %s. Retrying in %.1fs",
+                            url, attempt + 1, _MAX_RETRIES + 1, e, delay)
+                await asyncio.sleep(delay)
+                continue
+
+            if resp.status_code == 403 and not reauthed:
+                log.info("Token expired, re-authenticating")
+                reauthed = True
+                await self.authenticate()
+                resp = await self._client.request(method, url, headers=self._headers, **kwargs)
+
+            if resp.status_code == 429:
+                raise RateLimitError(_retry_after(resp, self.AUTH_COOLDOWN))
+
+            if resp.status_code in RETRYABLE_STATUSES and retry and attempt < _MAX_RETRIES:
+                delay = _BASE_DELAY * (2 ** attempt)
+                log.warning("Request to %s returned %d (attempt %d/%d). Retrying in %.1fs",
+                            url, resp.status_code, attempt + 1, _MAX_RETRIES + 1, delay)
+                await asyncio.sleep(delay)
+                continue
+
+            resp.raise_for_status()
+            return resp
 
     async def get_instruments(self) -> dict[str, str]:
         if self._instrument_cache and (time.monotonic() - self._instrument_cache_time) < self._instrument_cache_ttl:
@@ -95,7 +129,10 @@ class INDstocksBroker(BrokerInterface):
     async def get_balance(self) -> float:
         resp = await self._request("GET", f"{BASE_URL}/funds")
         data = resp.json()
-        return float(data.get("data", {}).get("available_balance", 0))
+        avl = data.get("data", {}).get("detailed_avl_balance")
+        if not isinstance(avl, dict) or "eq_cnc" not in avl:
+            raise ValueError(f"Unexpected /funds payload, cannot read balance: {data}")
+        return float(avl["eq_cnc"])
 
     async def get_quote(self, symbol: str, exchange: str) -> Quote:
         elapsed = time.monotonic() - self._last_quote_time
@@ -133,7 +170,7 @@ class INDstocksBroker(BrokerInterface):
         }
         if order.limit_price is not None and order.order_type == "LIMIT":
             payload["limit_price"] = order.limit_price
-        resp = await self._request("POST", f"{BASE_URL}/order", json=payload)
+        resp = await self._request("POST", f"{BASE_URL}/order", retry=False, json=payload)
         data = resp.json()["data"]
         return OrderResult(order_id=data["order_id"], status=data["order_status"])
 
