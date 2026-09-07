@@ -72,7 +72,6 @@ async def poll_channels():
 
             signal = await analyze_message(
                 msg["text"], context_texts,
-                api_key=config.OPENROUTER_API_KEY,
                 tier1_model=config.TIER1_MODEL,
                 tier2_model=config.TIER2_MODEL,
                 http_client=http_client,
@@ -180,18 +179,19 @@ async def handle_status_command():
         except Exception as e2:
             checks.append(f"Broker (INDstocks): DOWN ({e2})")
 
+    provider = {"openrouter": "OpenRouter", "gemini": "Gemini"}[config.LLM_PROVIDER]
     try:
         resp = await http_client.get(
-            "https://openrouter.ai/api/v1/models",
-            headers={"Authorization": f"Bearer {config.OPENROUTER_API_KEY}"},
+            f"{config.LLM_BASE_URL}/models",
+            headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
             timeout=10,
         )
         if resp.status_code == 200:
-            checks.append("LLM (OpenRouter): connected")
+            checks.append(f"LLM ({provider}): connected")
         else:
-            checks.append(f"LLM (OpenRouter): error {resp.status_code}")
+            checks.append(f"LLM ({provider}): error {resp.status_code}")
     except Exception as e:
-        checks.append(f"LLM (OpenRouter): DOWN ({e})")
+        checks.append(f"LLM ({provider}): DOWN ({e})")
 
     pending = await get_all_pending_candidates(db_conn)
     checks.append(f"Pending trades: {len(pending)}")
