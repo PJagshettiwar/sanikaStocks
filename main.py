@@ -252,12 +252,10 @@ async def handle_costs_command():
 
 
 TELEGRAM_START_ATTEMPTS = 5
-AUTH_COOLDOWN_SECONDS = 60
+AUTH_COOLDOWN_SECONDS = 1800
 
 
 async def wait_out_auth_cooldown(cooldown_file):
-    # Waiting beats exiting: on exit Docker restarts us straight back into the
-    # same check, so the container would spin until the cooldown expired.
     if not os.path.exists(cooldown_file):
         return
     try:
@@ -447,13 +445,16 @@ async def main():
             try:
                 await bot_client.run_until_disconnected()
                 break
-            except (ValueError, ConnectionError, OSError) as exc:
+            except (KeyboardInterrupt, SystemExit):
+                raise
+            except Exception as exc:
                 log.warning("Bot keepalive failed (%s), reconnecting in 60s...", exc)
                 await asyncio.sleep(60)
                 try:
-                    await bot_client.connect()
+                    await start_telegram_client(bot_client, bot_token=config.TELEGRAM_BOT_TOKEN)
                 except Exception as reconn_exc:
-                    log.warning("Reconnect failed (%s), will retry in 60s", reconn_exc)
+                    log.warning("Reconnect failed (%s), will retry", reconn_exc)
+                    continue
     finally:
         if http_client:
             await http_client.aclose()

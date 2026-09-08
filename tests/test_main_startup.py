@@ -51,7 +51,7 @@ async def test_cooldown_absent_does_not_wait(tmp_path):
 @pytest.mark.asyncio
 async def test_cooldown_waits_out_remaining_time_then_clears(tmp_path):
     marker = tmp_path / ".auth_cooldown"
-    written_at = datetime.now(timezone.utc).timestamp() - 10
+    written_at = datetime.now(timezone.utc).timestamp() - 300
     marker.write_text(str(written_at))
 
     sleep = AsyncMock()
@@ -59,7 +59,7 @@ async def test_cooldown_waits_out_remaining_time_then_clears(tmp_path):
         await main.wait_out_auth_cooldown(str(marker))
 
     waited = sleep.await_args[0][0]
-    assert 40 < waited <= main.AUTH_COOLDOWN_SECONDS - 10
+    assert 1450 < waited <= main.AUTH_COOLDOWN_SECONDS - 300
     assert not marker.exists()
 
 
