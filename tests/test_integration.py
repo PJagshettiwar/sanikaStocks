@@ -77,6 +77,7 @@ def _make_broker(balance=100000, price=1486.0):
         volume=1000000, day_high=1495.0, day_low=1480.0,
     )
     broker.get_instruments.return_value = {"RELIANCE": "2885", "INFY": "5678"}
+    broker.get_tick_size = lambda symbol: 0.05
     broker.place_order.return_value = OrderResult(order_id="ORD123", status="placed")
     broker.get_positions.return_value = []
     return broker

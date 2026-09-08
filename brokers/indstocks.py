@@ -44,6 +44,7 @@ class INDstocksBroker(BrokerInterface):
         self._client = http_client or httpx.AsyncClient(timeout=30)
         self._headers = {"Authorization": "", "Content-Type": "application/json"}
         self._instrument_cache: dict[str, str] = {}
+        self._tick_size_cache: dict[str, float] = {}
         self._instrument_cache_time: float = 0
         self._instrument_cache_ttl: float = 86400
         self._last_quote_time: float = 0
@@ -118,6 +119,7 @@ class INDstocksBroker(BrokerInterface):
         resp = await self._request("GET", f"{BASE_URL}/market/instruments", params={"source": "equity"})
         reader = csv.DictReader(io.StringIO(resp.text))
         new_cache: dict[str, str] = {}
+        new_ticks: dict[str, float] = {}
         for row in reader:
             exchange = row.get("EXCH", "").strip()
             if exchange != "NSE":
@@ -126,9 +128,16 @@ class INDstocksBroker(BrokerInterface):
             sec_id = row.get("SECURITY_ID", "").strip()
             if symbol and sec_id:
                 new_cache[symbol] = sec_id
+                raw_tick = row.get("TICK_SIZE", "").strip()
+                if raw_tick:
+                    new_ticks[symbol] = float(raw_tick) / 100.0
         self._instrument_cache = new_cache
+        self._tick_size_cache = new_ticks
         self._instrument_cache_time = time.monotonic()
         return self._instrument_cache
+
+    def get_tick_size(self, symbol: str) -> float:
+        return self._tick_size_cache.get(symbol, 0.05)
 
     async def get_balance(self) -> float:
         resp = await self._request("GET", f"{BASE_URL}/funds")

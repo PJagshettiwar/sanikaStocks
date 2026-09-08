@@ -280,11 +280,12 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
     try:
         instruments = await broker.get_instruments()
         security_id = instruments.get(candidate["symbol"])
-        limit_price = quote.price
+        tick = broker.get_tick_size(candidate["symbol"])
         if candidate["action"] == "BUY":
-            limit_price = round(quote.price * 1.002, 2)
-        elif candidate["action"] == "SELL":
-            limit_price = round(quote.price * 0.998, 2)
+            limit_price = math.ceil(quote.price * 1.002 / tick) * tick
+        else:
+            limit_price = math.floor(quote.price * 0.998 / tick) * tick
+        limit_price = round(limit_price, 2)
         order = Order(
             symbol=candidate["symbol"],
             exchange=candidate["exchange"],
