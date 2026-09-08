@@ -87,3 +87,21 @@ async def test_cooldown_unreadable_marker_is_cleared(tmp_path):
 
     sleep.assert_not_awaited()
     assert not marker.exists()
+
+
+@pytest.mark.asyncio
+async def test_notify_sends_message():
+    client = AsyncMock()
+    with patch.object(main, "bot_client", client):
+        assert await main.notify("hello") is True
+
+    client.send_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_notify_swallows_telegram_failure():
+    client = AsyncMock()
+    client.send_message = AsyncMock(side_effect=ValueError("Request was unsuccessful 6 time(s)"))
+
+    with patch.object(main, "bot_client", client):
+        assert await main.notify("hello") is False

@@ -276,6 +276,17 @@ async def wait_out_auth_cooldown(cooldown_file):
         pass
 
 
+async def notify(text):
+    # A restart loop earns a Telegram flood limit, which then fails every send.
+    # Startup notices must not take the process down and deepen that loop.
+    try:
+        await bot_client.send_message(config.APPROVAL_CHAT_ID, text)
+        return True
+    except Exception as e:
+        log.warning("Could not send Telegram notification: %s", e)
+        return False
+
+
 async def start_telegram_client(client, **start_kwargs):
     # Telegram answers GetState with RPC_CALL_FAIL for minutes at a time. Without
     # this the process dies and Docker's restart budget runs out for good.
@@ -341,11 +352,7 @@ async def main():
         await start_telegram_client(bot_client, bot_token=config.TELEGRAM_BOT_TOKEN)
         log.info("Bot client connected")
 
-        await bot_client.send_message(
-            config.APPROVAL_CHAT_ID,
-            "Stock agent started. Send /status for health check.",
-        )
-        log.info("Startup notification sent to Telegram")
+        await notify("Stock agent started. Send /status for health check.")
 
         try:
             user_client = TelegramClient(
@@ -359,20 +366,22 @@ async def main():
             log.info("User client connected")
         except EOFError:
             log.error("Telegram user session missing or expired. Channel polling disabled.")
-            await bot_client.send_message(
-                config.APPROVAL_CHAT_ID,
+            await notify(
                 "WARNING: Telegram user session invalid. Channel polling disabled.\n"
                 "Run session setup script on server to fix.",
             )
+            user_client = None
+        except Exception as e:
+            log.error("User client failed to connect: %s. Channel polling disabled.", e, exc_info=True)
+            await notify(f"WARNING: Telegram user client down. Channel polling disabled.\n{e}")
             user_client = None
 
         pending_count = await load_pending_from_db(db_conn)
         log.info("Loaded %d pending candidates from DB", pending_count)
 
         if pending_count > 0:
-            await bot_client.send_message(
-                config.APPROVAL_CHAT_ID,
-                f"{pending_count} pending trade(s) awaiting approval.\nSend /pending to review them.",
+            await notify(
+                f"{pending_count} pending trade(s) awaiting approval.\nSend /pending to review them."
             )
 
         bot_me = await bot_client.get_me()
