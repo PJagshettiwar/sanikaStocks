@@ -3,7 +3,7 @@ import time
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
-from brokers.base import BrokerInterface, Order, Quote, OrderResult
+from brokers.base import BrokerInterface, Order, Quote, OrderResult, OrderStatus
 from brokers.indstocks import INDstocksBroker, RateLimitError
 
 
@@ -373,3 +373,69 @@ async def test_place_order_rejects_invalid_qty(bad_qty):
     )
     with pytest.raises(ValueError, match="must be >= 1"):
         await broker.place_order(order)
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_returns_order_status():
+    mock_response = httpx.Response(
+        200,
+        json={"status": "success", "data": {
+            "id": "EQ-99536862",
+            "status": "SUCCESS",
+            "traded_qty": 12,
+            "traded_price": 411.40,
+            "requested_qty": 12,
+            "requested_price": 412.22,
+            "extra_info": "",
+        }},
+        request=httpx.Request("GET", "https://api.indstocks.com/order"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
+    result = await broker.get_order_status("EQ-99536862")
+
+    assert isinstance(result, OrderStatus)
+    assert result.order_id == "EQ-99536862"
+    assert result.status == "SUCCESS"
+    assert result.traded_qty == 12
+    assert result.traded_price == 411.40
+    assert result.requested_qty == 12
+    assert result.requested_price == 412.22
+    assert result.extra_info == ""
+
+    call_kwargs = client.request.call_args
+    assert call_kwargs.args[0] == "GET"
+    body = call_kwargs.kwargs.get("json")
+    assert body == {"order_id": "EQ-99536862", "segment": "EQUITY"}
+
+
+@pytest.mark.asyncio
+async def test_get_order_status_failed_order_has_extra_info():
+    mock_response = httpx.Response(
+        200,
+        json={"status": "success", "data": {
+            "id": "EQ-99536862",
+            "status": "FAILED",
+            "traded_qty": 0,
+            "traded_price": 0,
+            "requested_qty": 12,
+            "requested_price": 412.22,
+            "extra_info": "RMS:Blocked for nse_cm ACMESOLAR-EQ Insufficient Margin",
+        }},
+        request=httpx.Request("GET", "https://api.indstocks.com/order"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
+    result = await broker.get_order_status("EQ-99536862")
+
+    assert result.status == "FAILED"
+    assert result.traded_qty == 0
+    assert "Insufficient Margin" in result.extra_info

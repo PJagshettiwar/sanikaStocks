@@ -7,7 +7,7 @@ import time
 import httpx
 import pyotp
 
-from brokers.base import BrokerInterface, Order, OrderResult, Position, Quote
+from brokers.base import BrokerInterface, Order, OrderResult, OrderStatus, Position, Quote
 
 BASE_URL = "https://api.indstocks.com"
 ALGO_ID = "99999"
@@ -200,3 +200,19 @@ class INDstocksBroker(BrokerInterface):
             )
             for p in resp.json().get("data", [])
         ]
+
+    async def get_order_status(self, order_id: str) -> OrderStatus:
+        resp = await self._request(
+            "GET", f"{BASE_URL}/order",
+            json={"order_id": order_id, "segment": "EQUITY"},
+        )
+        data = resp.json()["data"]
+        return OrderStatus(
+            order_id=data["id"],
+            status=data["status"],
+            traded_qty=int(data.get("traded_qty", 0)),
+            traded_price=float(data.get("traded_price", 0)),
+            requested_qty=int(data.get("requested_qty", 0)),
+            requested_price=float(data.get("requested_price", 0)),
+            extra_info=data.get("extra_info", ""),
+        )
