@@ -363,7 +363,7 @@ async def test_verify_order_fill_success():
     mock_audit.assert_called_once()
     audit_action = mock_audit.call_args[0][2]
     assert audit_action == "order_filled"
-    mock_fill.assert_called_once_with(db_conn, 1, 1486.0, 3)
+    mock_fill.assert_called_once_with(db_conn, 1, "ORD123", 1486.0, 3)
 
 
 @pytest.mark.asyncio
@@ -411,7 +411,7 @@ async def test_verify_order_fill_partial_fill():
     sent_text = bot.send_message.call_args[0][1]
     assert "5" in sent_text
     assert "12" in sent_text
-    mock_fill.assert_called_once_with(db_conn, 6, 411.20, 5)
+    mock_fill.assert_called_once_with(db_conn, 6, "ORD123", 411.20, 5)
     assert mock_audit.call_args[0][2] == "order_failed"
 
 

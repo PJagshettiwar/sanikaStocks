@@ -240,11 +240,11 @@ async def save_trade(conn, trade_candidate_id, symbol, exchange, side, quantity,
     return cursor.lastrowid
 
 
-async def update_trade_fill(conn, trade_candidate_id, traded_price, traded_qty):
+async def update_trade_fill(conn, trade_candidate_id, order_id, traded_price, traded_qty):
     amount = round(traded_qty * traded_price, 2)
     await conn.execute(
-        "UPDATE trades SET price = ?, quantity = ?, amount = ? WHERE trade_candidate_id = ?",
-        (traded_price, traded_qty, amount, trade_candidate_id),
+        "UPDATE trades SET price = ?, quantity = ?, amount = ? WHERE trade_candidate_id = ? AND order_id = ?",
+        (traded_price, traded_qty, amount, trade_candidate_id, order_id),
     )
     await conn.commit()
 

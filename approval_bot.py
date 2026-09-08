@@ -167,7 +167,7 @@ async def verify_order_fill(order_id, symbol, action, qty, broker, bot_client, c
                     f"Order ID: {order_id}",
                 )
                 try:
-                    await update_trade_fill(db_conn, candidate_id, order_status.traded_price, order_status.traded_qty)
+                    await update_trade_fill(db_conn, candidate_id, order_id, order_status.traded_price, order_status.traded_qty)
                     await save_audit_log(db_conn, candidate_id, "order_filled",
                                          {"order_id": order_id},
                                          {"status": last_status, "traded_qty": order_status.traded_qty,
@@ -190,7 +190,7 @@ async def verify_order_fill(order_id, symbol, action, qty, broker, bot_client, c
                         f"Order ID: {order_id}",
                     )
                     try:
-                        await update_trade_fill(db_conn, candidate_id, order_status.traded_price, order_status.traded_qty)
+                        await update_trade_fill(db_conn, candidate_id, order_id, order_status.traded_price, order_status.traded_qty)
                     except Exception as e:
                         log.error("DB update after partial fill failed for %s: %s", order_id, e)
                 else:

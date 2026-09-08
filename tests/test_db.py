@@ -220,7 +220,7 @@ async def test_update_trade_fill_updates_price_and_quantity(tmp_path):
             side="BUY", quantity=12, price=412.22, order_id="EQ-99536862",
         )
 
-        await update_trade_fill(conn, trade_candidate_id=1, traded_price=411.40, traded_qty=12)
+        await update_trade_fill(conn, trade_candidate_id=1, order_id="EQ-99536862", traded_price=411.40, traded_qty=12)
 
         cursor = await conn.execute("SELECT price, quantity, amount FROM trades WHERE id = ?", (trade_id,))
         row = await cursor.fetchone()
@@ -244,7 +244,7 @@ async def test_update_trade_fill_partial_fill(tmp_path):
             side="BUY", quantity=12, price=412.22, order_id="EQ-99536863",
         )
 
-        await update_trade_fill(conn, trade_candidate_id=2, traded_price=411.40, traded_qty=5)
+        await update_trade_fill(conn, trade_candidate_id=2, order_id="EQ-99536863", traded_price=411.40, traded_qty=5)
 
         cursor = await conn.execute("SELECT price, quantity, amount FROM trades WHERE id = ?", (trade_id,))
         row = await cursor.fetchone()
