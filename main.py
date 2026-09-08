@@ -382,11 +382,16 @@ async def main():
                 f"{pending_count} pending trade(s) awaiting approval.\nSend /pending to review them."
             )
 
-        bot_me = await bot_client.get_me()
+        try:
+            bot_me = await bot_client.get_me()
+            bot_id = bot_me.id
+        except Exception as e:
+            log.warning("get_me failed (%s), bot will not filter own messages", e)
+            bot_id = None
 
         @bot_client.on(events.NewMessage(chats=config.APPROVAL_CHAT_ID))
         async def on_message(event):
-            if event.sender_id == bot_me.id:
+            if bot_id and event.sender_id == bot_id:
                 return
 
             text = (event.text or "").strip()
