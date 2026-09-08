@@ -240,6 +240,15 @@ async def save_trade(conn, trade_candidate_id, symbol, exchange, side, quantity,
     return cursor.lastrowid
 
 
+async def update_trade_fill(conn, trade_candidate_id, order_id, traded_price, traded_qty):
+    amount = round(traded_qty * traded_price, 2)
+    await conn.execute(
+        "UPDATE trades SET price = ?, quantity = ?, amount = ? WHERE trade_candidate_id = ? AND order_id = ?",
+        (traded_price, traded_qty, amount, trade_candidate_id, order_id),
+    )
+    await conn.commit()
+
+
 async def close_trade(conn, trade_id, sell_price, sell_order_id=None, sell_charges=0):
     cursor = await conn.execute("SELECT quantity, price, broker_charges FROM trades WHERE id = ?", (trade_id,))
     row = await cursor.fetchone()

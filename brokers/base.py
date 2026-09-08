@@ -32,6 +32,17 @@ class OrderResult:
 
 
 @dataclass
+class OrderStatus:
+    order_id: str
+    status: str
+    traded_qty: int
+    traded_price: float
+    requested_qty: int
+    requested_price: float
+    extra_info: str
+
+
+@dataclass
 class Position:
     security_id: str
     symbol: str
@@ -52,6 +63,9 @@ class BrokerInterface(ABC):
 
     @abstractmethod
     async def get_positions(self) -> list[Position]: ...
+
+    @abstractmethod
+    async def get_order_status(self, order_id: str) -> OrderStatus: ...
 
     @abstractmethod
     async def get_instruments(self) -> dict[str, str]: ...

@@ -33,6 +33,7 @@ from approval_bot import (
     format_trade_card, parse_approval_reply, handle_approval_reply,
     _msg_to_candidate, _remove_pending, verify_order_fill,
     VERIFY_INTERVAL_SECONDS, VERIFY_MAX_ATTEMPTS,
+    SUCCESS_STATUSES, FAILURE_STATUSES,
 )
 
 
@@ -336,52 +337,150 @@ async def test_handle_approval_order_failure():
     mock_status.assert_not_called()
 
 
-# --- verify_order_fill tests (R2-M10) ---
+# --- verify_order_fill tests ---
 
 
 @pytest.mark.asyncio
-async def test_verify_order_fill_buy_confirmed():
+async def test_verify_order_fill_success():
+    from brokers.base import OrderStatus
     broker = _make_broker()
-    from brokers.base import Position
-    broker.get_positions.return_value = [
-        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1486.0)
-    ]
+    broker.get_order_status = AsyncMock(return_value=OrderStatus(
+        order_id="ORD123", status="SUCCESS", traded_qty=3, traded_price=1486.0,
+        requested_qty=3, requested_price=1487.97, extra_info="",
+    ))
     bot = _make_bot_client()
+    db_conn = AsyncMock()
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
-        await verify_order_fill("RELIANCE", 5, "BUY", broker, bot, 123, pre_order_qty=5)
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log") as mock_audit, \
+         patch("approval_bot.update_trade_fill") as mock_fill:
+        await verify_order_fill("ORD123", "RELIANCE", "BUY", 3, broker, bot, 123, db_conn, 1)
 
     sent_text = bot.send_message.call_args[0][1]
-    assert "FILLED" in sent_text
-    assert "BUY" in sent_text
+    assert "FILLED" in sent_text or "filled" in sent_text.lower()
+    assert "RELIANCE" in sent_text
+    assert "ORD123" in sent_text
+    mock_audit.assert_called_once()
+    audit_action = mock_audit.call_args[0][2]
+    assert audit_action == "order_filled"
+    mock_fill.assert_called_once_with(db_conn, 1, "ORD123", 1486.0, 3)
 
 
 @pytest.mark.asyncio
-async def test_verify_order_fill_sell_confirmed():
+async def test_verify_order_fill_failed_with_reason():
+    from brokers.base import OrderStatus
     broker = _make_broker()
-    broker.get_positions.return_value = []
+    broker.get_order_status = AsyncMock(return_value=OrderStatus(
+        order_id="ORD123", status="FAILED", traded_qty=0, traded_price=0,
+        requested_qty=12, requested_price=412.22,
+        extra_info="RMS:Blocked for nse_cm ACMESOLAR-EQ Insufficient Margin",
+    ))
     bot = _make_bot_client()
+    db_conn = AsyncMock()
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
-        await verify_order_fill("RELIANCE", 5, "SELL", broker, bot, 123, pre_order_qty=5)
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log") as mock_audit, \
+         patch("approval_bot.update_trade_fill") as mock_fill:
+        await verify_order_fill("ORD123", "ACMESOLAR", "BUY", 12, broker, bot, 123, db_conn, 6)
 
     sent_text = bot.send_message.call_args[0][1]
-    assert "FILLED" in sent_text
-    assert "SELL" in sent_text
+    assert "FAILED" in sent_text
+    assert "Insufficient Margin" in sent_text
+    mock_audit.assert_called_once()
+    assert mock_audit.call_args[0][2] == "order_failed"
+    mock_fill.assert_not_called()
 
 
 @pytest.mark.asyncio
-async def test_verify_order_fill_not_confirmed():
+async def test_verify_order_fill_partial_fill():
+    from brokers.base import OrderStatus
     broker = _make_broker()
-    from brokers.base import Position
-    broker.get_positions.return_value = [
-        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1486.0)
-    ]
+    broker.get_order_status = AsyncMock(return_value=OrderStatus(
+        order_id="ORD123", status="PARTIALLY FILLED - CANCELLED",
+        traded_qty=5, traded_price=411.20,
+        requested_qty=12, requested_price=412.22, extra_info="User cancelled",
+    ))
     bot = _make_bot_client()
+    db_conn = AsyncMock()
 
-    with patch("asyncio.sleep", new_callable=AsyncMock):
-        await verify_order_fill("RELIANCE", 5, "BUY", broker, bot, 123, pre_order_qty=3)
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log") as mock_audit, \
+         patch("approval_bot.update_trade_fill") as mock_fill:
+        await verify_order_fill("ORD123", "ACMESOLAR", "BUY", 12, broker, bot, 123, db_conn, 6)
 
     sent_text = bot.send_message.call_args[0][1]
-    assert "NOT confirmed" in sent_text
-    assert broker.get_positions.call_count == VERIFY_MAX_ATTEMPTS
+    assert "5" in sent_text
+    assert "12" in sent_text
+    mock_fill.assert_called_once_with(db_conn, 6, "ORD123", 411.20, 5)
+    assert mock_audit.call_args[0][2] == "order_failed"
+
+
+@pytest.mark.asyncio
+async def test_verify_order_fill_timeout():
+    from brokers.base import OrderStatus
+    broker = _make_broker()
+    broker.get_order_status = AsyncMock(return_value=OrderStatus(
+        order_id="ORD123", status="INITIATED", traded_qty=0, traded_price=0,
+        requested_qty=12, requested_price=412.22, extra_info="",
+    ))
+    bot = _make_bot_client()
+    db_conn = AsyncMock()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log") as mock_audit:
+        await verify_order_fill("ORD123", "RELIANCE", "BUY", 12, broker, bot, 123, db_conn, 1)
+
+    sent_text = bot.send_message.call_args[0][1]
+    assert "NOT confirmed" in sent_text or "not confirmed" in sent_text.lower()
+    assert broker.get_order_status.call_count == VERIFY_MAX_ATTEMPTS
+    assert mock_audit.call_args[0][2] == "order_unconfirmed"
+
+
+@pytest.mark.asyncio
+async def test_verify_order_fill_recovers_from_single_failure():
+    from brokers.base import OrderStatus
+    broker = _make_broker()
+    success_status = OrderStatus(
+        order_id="ORD123", status="SUCCESS", traded_qty=3, traded_price=1486.0,
+        requested_qty=3, requested_price=1487.97, extra_info="",
+    )
+    broker.get_order_status = AsyncMock(
+        side_effect=[Exception("connection timeout"), success_status],
+    )
+    bot = _make_bot_client()
+    db_conn = AsyncMock()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.update_trade_fill"):
+        await verify_order_fill("ORD123", "RELIANCE", "BUY", 3, broker, bot, 123, db_conn, 1)
+
+    sent_text = bot.send_message.call_args[0][1]
+    assert "FILLED" in sent_text or "filled" in sent_text.lower()
+    assert broker.get_order_status.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_verify_polls_until_terminal():
+    from brokers.base import OrderStatus
+    broker = _make_broker()
+    pending = OrderStatus(
+        order_id="ORD123", status="PENDING", traded_qty=0, traded_price=0,
+        requested_qty=3, requested_price=1487.97, extra_info="",
+    )
+    success = OrderStatus(
+        order_id="ORD123", status="SUCCESS", traded_qty=3, traded_price=1486.0,
+        requested_qty=3, requested_price=1487.97, extra_info="",
+    )
+    broker.get_order_status = AsyncMock(side_effect=[pending, pending, success])
+    bot = _make_bot_client()
+    db_conn = AsyncMock()
+
+    with patch("asyncio.sleep", new_callable=AsyncMock), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.update_trade_fill"):
+        await verify_order_fill("ORD123", "RELIANCE", "BUY", 3, broker, bot, 123, db_conn, 1)
+
+    assert broker.get_order_status.call_count == 3
+    sent_text = bot.send_message.call_args[0][1]
+    assert "FILLED" in sent_text or "filled" in sent_text.lower()

@@ -12,7 +12,7 @@ from db import (
     get_pending_candidate, update_candidate_status,
     save_decision, save_audit_log, save_trade,
     set_telegram_msg_id, get_all_pending_candidates,
-    get_symbol_pnl,
+    get_symbol_pnl, update_trade_fill,
 )
 
 APPROVE_WORDS = {"a", "approve", "yes", "y"}
@@ -21,6 +21,12 @@ log = logging.getLogger("approval_bot")
 _URL_RE = re.compile(r"https?://\S+")
 
 IST = timezone(timedelta(hours=5, minutes=30))
+
+SUCCESS_STATUSES = {"SUCCESS"}
+FAILURE_STATUSES = {
+    "FAILED", "ABORTED", "CANCELLED", "EXPIRED",
+    "PARTIALLY FILLED", "PARTIALLY FILLED - CANCELLED", "PARTIALLY FILLED - EXPIRED",
+}
 
 # msg_id -> candidate_id (persisted in DB, rebuilt on startup)
 _msg_to_candidate: dict[int, int] = {}
@@ -135,36 +141,92 @@ VERIFY_INTERVAL_SECONDS = 60
 VERIFY_MAX_ATTEMPTS = 10
 
 
-async def verify_order_fill(symbol, expected_qty, action, broker, bot_client, chat_id, pre_order_qty=0):
+async def verify_order_fill(order_id, symbol, action, qty, broker, bot_client, chat_id, db_conn, candidate_id):
+    log.info("Verify started for order %s (%s %s x%d)", order_id, symbol, action, qty)
+    last_status = None
     try:
         for attempt in range(1, VERIFY_MAX_ATTEMPTS + 1):
             await asyncio.sleep(VERIFY_INTERVAL_SECONDS)
             try:
-                positions = await broker.get_positions()
-                held = next((p for p in positions if p.symbol == symbol), None)
-                if action == "BUY" and held and held.net_qty >= pre_order_qty + expected_qty:
-                    await bot_client.send_message(
-                        chat_id,
-                        f"Order FILLED: {symbol} BUY x{expected_qty} confirmed in portfolio "
-                        f"(held: {held.net_qty} @ avg {held.avg_price:,.2f})",
-                    )
-                    return
-                if action == "SELL" and (not held or held.net_qty <= pre_order_qty - expected_qty):
-                    await bot_client.send_message(
-                        chat_id,
-                        f"Order FILLED: {symbol} SELL x{expected_qty} confirmed "
-                        f"(remaining: {held.net_qty if held else 0})",
-                    )
-                    return
+                order_status = await broker.get_order_status(order_id)
+                last_status = order_status.status
+                log.info("Verify attempt %d/%d for order %s: status=%s",
+                         attempt, VERIFY_MAX_ATTEMPTS, order_id, last_status)
             except Exception as e:
-                log.warning("Verify attempt %d/%d for %s failed: %s", attempt, VERIFY_MAX_ATTEMPTS, symbol, e)
+                log.warning("Verify attempt %d/%d for %s failed: %s",
+                            attempt, VERIFY_MAX_ATTEMPTS, order_id, e)
+                continue
+
+            if last_status in SUCCESS_STATUSES:
+                log.info("Order filled: %s %s x%d @ %.2f",
+                         order_id, action, order_status.traded_qty, order_status.traded_price)
+                await bot_client.send_message(
+                    chat_id,
+                    f"Order FILLED: {symbol} {action} x{order_status.traded_qty} @ "
+                    f"{order_status.traded_price:,.2f}\n"
+                    f"Order ID: {order_id}",
+                )
+                try:
+                    await update_trade_fill(db_conn, candidate_id, order_id, order_status.traded_price, order_status.traded_qty)
+                    await save_audit_log(db_conn, candidate_id, "order_filled",
+                                         {"order_id": order_id},
+                                         {"status": last_status, "traded_qty": order_status.traded_qty,
+                                          "traded_price": order_status.traded_price})
+                except Exception as e:
+                    log.error("DB update after fill failed for %s: %s", order_id, e)
+                return
+
+            if last_status in FAILURE_STATUSES:
+                if order_status.traded_qty > 0:
+                    log.warning("Partial fill: %s %s %d of %d @ %.2f, reason=%s",
+                                order_id, action, order_status.traded_qty, qty,
+                                order_status.traded_price, order_status.extra_info)
+                    await bot_client.send_message(
+                        chat_id,
+                        f"Partial fill: {symbol} {action} {order_status.traded_qty} of {qty} "
+                        f"@ {order_status.traded_price:,.2f}\n"
+                        f"Remaining {qty - order_status.traded_qty} {last_status.lower()}\n"
+                        f"Reason: {order_status.extra_info or 'none'}\n"
+                        f"Order ID: {order_id}",
+                    )
+                    try:
+                        await update_trade_fill(db_conn, candidate_id, order_id, order_status.traded_price, order_status.traded_qty)
+                    except Exception as e:
+                        log.error("DB update after partial fill failed for %s: %s", order_id, e)
+                else:
+                    log.warning("Order failed: %s status=%s reason=%s",
+                                order_id, last_status, order_status.extra_info)
+                    await bot_client.send_message(
+                        chat_id,
+                        f"Order {last_status}: {symbol} {action} x{qty}\n"
+                        f"Reason: {order_status.extra_info or 'none'}\n"
+                        f"Order ID: {order_id}",
+                    )
+                try:
+                    await save_audit_log(db_conn, candidate_id, "order_failed",
+                                         {"order_id": order_id},
+                                         {"status": last_status, "traded_qty": order_status.traded_qty,
+                                          "extra_info": order_status.extra_info})
+                except Exception as e:
+                    log.error("DB audit after failure failed for %s: %s", order_id, e)
+                return
+
+        log.warning("Order unconfirmed after %d attempts: %s last_status=%s",
+                     VERIFY_MAX_ATTEMPTS, order_id, last_status)
         await bot_client.send_message(
             chat_id,
-            f"Order NOT confirmed after {VERIFY_MAX_ATTEMPTS} min: {symbol} {action} x{expected_qty}. "
-            f"Check broker manually.",
+            f"Order NOT confirmed after {VERIFY_MAX_ATTEMPTS} min: {symbol} {action} x{qty}\n"
+            f"Last status: {last_status or 'unknown'}\n"
+            f"Order ID: {order_id}\nCheck broker manually.",
         )
+        try:
+            await save_audit_log(db_conn, candidate_id, "order_unconfirmed",
+                                 {"order_id": order_id},
+                                 {"last_status": last_status})
+        except Exception as e:
+            log.error("DB audit after timeout failed for %s: %s", order_id, e)
     except Exception as e:
-        log.error("verify_order_fill crashed for %s %s x%d: %s", symbol, action, expected_qty, e)
+        log.error("verify_order_fill crashed for %s: %s", order_id, e)
 
 
 async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInterface, db_conn, bot_client, chat_id: int) -> str:
@@ -190,6 +252,7 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         return "finalized"
 
     if decision == "reject":
+        log.info("Rejection received for #%d (%s)", candidate_id, candidate["symbol"])
         await update_candidate_status(db_conn, candidate_id, "rejected")
         await save_decision(db_conn, candidate_id, "reject", None)
         _remove_pending(candidate_id)
@@ -200,8 +263,11 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         )
         return "finalized"
 
+    log.info("Approval received for #%d (%s %s)", candidate_id, candidate["action"], candidate["symbol"])
+
     is_open, reason = _is_market_open()
     if not is_open:
+        log.info("Market closed for #%d: %s", candidate_id, reason)
         await bot_client.send_message(chat_id, f"{reason}. Reply A again during market hours.")
         return "market_closed"
 
@@ -279,14 +345,6 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         await bot_client.send_message(chat_id, f"Already {current_status}.")
         _remove_pending(candidate_id)
         return "finalized"
-
-    pre_order_qty = 0
-    try:
-        positions = await broker.get_positions()
-        held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
-        pre_order_qty = held.net_qty if held else 0
-    except Exception:
-        pass
 
     try:
         instruments = await broker.get_instruments()
@@ -369,7 +427,7 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
             pass
     await bot_client.send_message(chat_id, "\n".join(confirm_lines))
     asyncio.create_task(verify_order_fill(
-        candidate["symbol"], order.qty, candidate["action"],
-        broker, bot_client, chat_id, pre_order_qty=pre_order_qty,
+        result.order_id, candidate["symbol"], candidate["action"], order.qty,
+        broker, bot_client, chat_id, db_conn, candidate_id,
     ))
     return "finalized"
