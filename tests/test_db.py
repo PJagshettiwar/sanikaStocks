@@ -206,6 +206,54 @@ async def test_get_all_pending_candidates_returns_full_data(db_conn):
 
 
 @pytest.mark.asyncio
+async def test_update_trade_fill_updates_price_and_quantity(tmp_path):
+    import aiosqlite
+    from db import init_db, save_trade, update_trade_fill
+
+    db_path = str(tmp_path / "test.db")
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        await init_db(conn)
+
+        trade_id = await save_trade(
+            conn, trade_candidate_id=1, symbol="ACMESOLAR", exchange="NSE",
+            side="BUY", quantity=12, price=412.22, order_id="EQ-99536862",
+        )
+
+        await update_trade_fill(conn, trade_candidate_id=1, traded_price=411.40, traded_qty=12)
+
+        cursor = await conn.execute("SELECT price, quantity, amount FROM trades WHERE id = ?", (trade_id,))
+        row = await cursor.fetchone()
+        assert row["price"] == 411.40
+        assert row["quantity"] == 12
+        assert row["amount"] == round(12 * 411.40, 2)
+
+
+@pytest.mark.asyncio
+async def test_update_trade_fill_partial_fill(tmp_path):
+    import aiosqlite
+    from db import init_db, save_trade, update_trade_fill
+
+    db_path = str(tmp_path / "test.db")
+    async with aiosqlite.connect(db_path) as conn:
+        conn.row_factory = aiosqlite.Row
+        await init_db(conn)
+
+        trade_id = await save_trade(
+            conn, trade_candidate_id=2, symbol="ACMESOLAR", exchange="NSE",
+            side="BUY", quantity=12, price=412.22, order_id="EQ-99536863",
+        )
+
+        await update_trade_fill(conn, trade_candidate_id=2, traded_price=411.40, traded_qty=5)
+
+        cursor = await conn.execute("SELECT price, quantity, amount FROM trades WHERE id = ?", (trade_id,))
+        row = await cursor.fetchone()
+        assert row["price"] == 411.40
+        assert row["quantity"] == 5
+        assert row["amount"] == round(5 * 411.40, 2)
+
+
+@pytest.mark.asyncio
 async def test_close_trade_calculates_pnl(db_conn):
     msg_id = await save_message(db_conn, 1, 1, "Buy", "2026-08-28T10:00:00")
     sig_id = await save_signal(db_conn, msg_id, {
