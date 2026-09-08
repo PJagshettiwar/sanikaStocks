@@ -211,7 +211,7 @@ async def test_analyze_message_tier2_fails_returns_none():
 
 
 @pytest.mark.asyncio
-async def test_extract_trade_rejects_invalid_exchange():
+async def test_extract_trade_overrides_non_nse_exchange():
     signal_json = json.dumps({
         "symbol": "GOLDPETAL",
         "exchange": "MCX",
@@ -233,7 +233,8 @@ async def test_extract_trade_rejects_invalid_exchange():
         model="nvidia/nemotron-3-super-120b-a12b:free",
         http_client=client,
     )
-    assert result is None
+    assert result is not None
+    assert result["exchange"] == "NSE"
 
 
 @pytest.mark.asyncio

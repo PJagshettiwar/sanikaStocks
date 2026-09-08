@@ -8,17 +8,17 @@ log = logging.getLogger("stock_agent")
 
 from config import LLM_BASE_URL, LLM_API_KEY, LLM_PROVIDER
 
-TIER1_SYSTEM_PROMPT = """You are a stock tip detector for Indian stock markets (NSE/BSE).
+TIER1_SYSTEM_PROMPT = """You are a stock tip detector for Indian stock markets (NSE).
 Respond ONLY with JSON: {"is_tip": true/false, "confidence": 0.0-1.0}
 A stock tip contains a buy/sell recommendation with a specific stock name and at least one of: entry price, stop-loss, or target.
 General market commentary, news, greetings, or discussion is NOT a tip.
 Messages saying "hold", "continue to hold", "book profits", "book partial profits", or "trail SL" are NOT new tips. Return is_tip: false for these."""
 
-TIER2_SYSTEM_PROMPT = """You are a stock trade signal extractor for Indian markets (NSE/BSE).
+TIER2_SYSTEM_PROMPT = """You are a stock trade signal extractor for Indian markets (NSE).
 Extract the trade signal from the message and return ONLY valid JSON with this exact structure:
 {
   "symbol": "TRADING_SYMBOL (e.g. RELIANCE, INFY, TCS)",
-  "exchange": "NSE or BSE",
+  "exchange": "NSE",
   "action": "BUY or SELL",
   "entry_min": <number>,
   "entry_max": <number>,
@@ -160,9 +160,9 @@ async def extract_trade(text, context_messages, model, http_client):
     if result.get("action") not in ("BUY", "SELL"):
         log.warning("LLM returned invalid action: %s", result.get("action"))
         return None
-    if result.get("exchange") not in ("NSE", "BSE"):
-        log.warning("LLM returned invalid exchange: %s", result.get("exchange"))
-        return None
+    if result.get("exchange") != "NSE":
+        log.warning("LLM returned non-NSE exchange: %s, overriding to NSE", result.get("exchange"))
+        result["exchange"] = "NSE"
     if not isinstance(result.get("entry_min"), (int, float)) or result["entry_min"] <= 0:
         log.warning("LLM returned invalid entry_min: %s", result.get("entry_min"))
         return None
