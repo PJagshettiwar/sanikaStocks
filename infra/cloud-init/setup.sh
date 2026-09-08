@@ -129,8 +129,8 @@ if ! docker compose ps --status running 2>/dev/null | grep -q stock-agent; then
   fi
 fi
 
-# Check CPU (>80%)
-CPU_USAGE=$(top -bn1 | grep "Cpu(s)" | awk '{print int($2 + $4)}' || echo 0)
+# Check CPU (>80%) — average over 3 seconds so single-tick spikes don't false-alarm
+CPU_USAGE=$(mpstat 1 3 2>/dev/null | awk '/^Average/ {print int(100 - $NF)}' || echo 0)
 if [ "$CPU_USAGE" -gt 80 ]; then
   send_alert "⚠️ <b>[$HOSTNAME] High CPU</b>: $${CPU_USAGE}%"
 fi
