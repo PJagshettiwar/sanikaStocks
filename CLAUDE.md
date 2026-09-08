@@ -2,6 +2,17 @@
 
 Automated stock trading agent for Indian markets (NSE/BSE). Monitors Telegram channels for trade tips, uses a 2-tier LLM pipeline (OpenRouter) to detect and extract signals, validates through a risk engine, sends approval cards via Telegram bot, and executes trades through INDstocks broker. Runs as a long-lived async Python process deployed via Docker on a Terraform-provisioned VM.
 
+## Runbooks <!-- verified: 2026-09 -->
+
+Read these before touching the server. They carry the traps that cost whole
+sessions to rediscover.
+
+- [docs/DEPLOY.md](docs/DEPLOY.md) — deploying to the VM, running Terraform,
+  fixing the health watchdog. Disconnect the VPN first; never run
+  `docker compose` as root.
+- [docs/LOGS.md](docs/LOGS.md) — reading container logs from the laptop with
+  `infra/scripts/logs.sh`, and what to check when they come back empty.
+
 ## Commands <!-- verified: 2026-08 -->
 
 ```bash
@@ -36,7 +47,7 @@ market_data.py       — market data utilities (yfinance)
 db.py                — SQLite via aiosqlite: schema init, all queries
 brokers/base.py      — BrokerInterface ABC + dataclasses (Quote, Order, Position, OrderResult)
 brokers/indstocks.py — INDstocks broker implementation (auth, quotes, orders, positions)
-tests/               — pytest + pytest-asyncio, 88 tests across 8 files
+tests/               — pytest + pytest-asyncio, 116 tests across 9 files
 scripts/             — standalone utilities (session setup, message analysis, local testing)
 infra/               — Terraform (OCI compute) + cloud-init deployment scripts
 ```
