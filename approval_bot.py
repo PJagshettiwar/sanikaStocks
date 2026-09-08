@@ -235,11 +235,6 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         await bot_client.send_message(chat_id, "Unrecognized. Reply A to approve, R to reject.")
         return "unrecognized"
 
-    if decision == "reject":
-        log.info("Rejection received for #%d", candidate_id)
-    else:
-        log.info("Approval received for #%d", candidate_id)
-
     candidate = await get_pending_candidate(db_conn, candidate_id)
     if not candidate:
         from db import get_candidate_status
@@ -252,6 +247,7 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         return "finalized"
 
     if decision == "reject":
+        log.info("Rejection received for #%d (%s)", candidate_id, candidate["symbol"])
         await update_candidate_status(db_conn, candidate_id, "rejected")
         await save_decision(db_conn, candidate_id, "reject", None)
         _remove_pending(candidate_id)
@@ -262,8 +258,11 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         )
         return "finalized"
 
+    log.info("Approval received for #%d (%s %s)", candidate_id, candidate["action"], candidate["symbol"])
+
     is_open, reason = _is_market_open()
     if not is_open:
+        log.info("Market closed for #%d: %s", candidate_id, reason)
         await bot_client.send_message(chat_id, f"{reason}. Reply A again during market hours.")
         return "market_closed"
 
