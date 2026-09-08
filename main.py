@@ -252,7 +252,7 @@ async def handle_costs_command():
 
 
 TELEGRAM_START_ATTEMPTS = 5
-AUTH_COOLDOWN_SECONDS = 1800
+AUTH_COOLDOWN_SECONDS = 60
 
 
 async def wait_out_auth_cooldown(cooldown_file):
