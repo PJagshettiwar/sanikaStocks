@@ -173,6 +173,11 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         await bot_client.send_message(chat_id, "Unrecognized. Reply A to approve, R to reject.")
         return "unrecognized"
 
+    if decision == "reject":
+        log.info("Rejection received for #%d", candidate_id)
+    else:
+        log.info("Approval received for #%d", candidate_id)
+
     candidate = await get_pending_candidate(db_conn, candidate_id)
     if not candidate:
         from db import get_candidate_status
@@ -207,6 +212,8 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
         return "error"
 
+    log.info("Balance for #%d: %.0f available", candidate_id, balance)
+
     if balance < FIXED_ALLOCATION_AMOUNT:
         await bot_client.send_message(
             chat_id,
@@ -220,6 +227,8 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         log.error("Quote fetch failed for %s: %s", candidate["symbol"], e)
         await bot_client.send_message(chat_id, f"Quote unavailable for {candidate['symbol']}. Reply A again to retry.")
         return "error"
+
+    log.info("Quote for #%d %s: %.2f", candidate_id, candidate["symbol"], quote.price)
 
     entry_min = candidate["entry_min"]
     entry_max = candidate["entry_max"]
@@ -260,6 +269,8 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         _remove_pending(candidate_id)
         _msg_to_candidate[msg.id] = candidate_id
         await set_telegram_msg_id(db_conn, candidate_id, msg.id)
+        log.info("Price changed for #%d %s: %.2f outside %.0f-%.0f, reapproval sent",
+                 candidate_id, candidate["symbol"], quote.price, entry_min, entry_max)
         return "reapproval_sent"
 
     from db import get_candidate_status as _get_status
@@ -299,6 +310,9 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         )
         result = await broker.place_order(order)
         await save_decision(db_conn, candidate_id, "approve", quote.price)
+        log.info("Order placed for #%d: %s %s x%d @ %.2f, order_id=%s, status=%s",
+                 candidate_id, candidate["symbol"], candidate["action"],
+                 order.qty, order.limit_price, result.order_id, result.status)
     except Exception as e:
         log.error("Order failed for %s: %s", candidate["symbol"], e)
         await bot_client.send_message(chat_id, f"Order failed for {candidate['symbol']}. Check logs and reply A to retry.")
@@ -323,6 +337,7 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
                 from db import close_trade
                 await close_trade(db_conn, buy_trade_id, quote.price, result.order_id)
         await update_candidate_status(db_conn, candidate_id, "executed")
+        log.info("Trade recorded for #%d, order_id=%s", candidate_id, result.order_id)
     except Exception as db_err:
         log.critical("DB write failed after order %s placed: %s", result.order_id, db_err)
         await bot_client.send_message(
