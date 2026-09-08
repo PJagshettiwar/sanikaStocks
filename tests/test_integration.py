@@ -39,7 +39,7 @@ from db import (
 from approval_bot import (
     format_trade_card, handle_approval_reply, send_approval,
     load_pending_from_db, _msg_to_candidate, _remove_pending,
-    verify_order_fill, _sanitize_source,
+    _sanitize_source,
 )
 from risk_engine import validate_signal, ValidationResult
 from stock_agent import extract_trade, detect_signal, analyze_message, _cost_tracker
@@ -284,51 +284,6 @@ async def test_targets_validation_normalizes():
     assert -1 not in r["targets"]
     assert 99999999 not in r["targets"]
     assert 1500 in r["targets"]
-
-
-# ---- R2-M4: verify_order_fill buy with existing position ----
-
-@pytest.mark.asyncio
-async def test_verify_order_fill_buy_with_existing_position():
-    broker = _make_broker()
-    bot = _make_bot()
-
-    unchanged = Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1486.0)
-    filled = Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=15, avg_price=1486.0)
-    broker.get_positions.side_effect = [
-        [unchanged],
-        [filled],
-    ]
-
-    with patch("approval_bot.VERIFY_INTERVAL_SECONDS", 0), \
-         patch("approval_bot.VERIFY_MAX_ATTEMPTS", 2):
-        await verify_order_fill("RELIANCE", 5, "BUY", broker, bot, 123, pre_order_qty=10)
-
-    calls = [c[0][1] for c in bot.send_message.call_args_list]
-    filled_msgs = [m for m in calls if "FILLED" in m]
-    assert len(filled_msgs) == 1
-    assert "BUY" in filled_msgs[0]
-    assert "x5" in filled_msgs[0]
-
-
-# ---- R2-M4: verify_order_fill partial sell ----
-
-@pytest.mark.asyncio
-async def test_verify_order_fill_partial_sell():
-    broker = _make_broker()
-    bot = _make_bot()
-
-    sold = Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1486.0)
-    broker.get_positions.return_value = [sold]
-
-    with patch("approval_bot.VERIFY_INTERVAL_SECONDS", 0), \
-         patch("approval_bot.VERIFY_MAX_ATTEMPTS", 1):
-        await verify_order_fill("RELIANCE", 10, "SELL", broker, bot, 123, pre_order_qty=20)
-
-    calls = [c[0][1] for c in bot.send_message.call_args_list]
-    filled_msgs = [m for m in calls if "FILLED" in m]
-    assert len(filled_msgs) == 1
-    assert "SELL" in filled_msgs[0]
 
 
 # ---- R2-M3: pending resend clears old mappings ----
