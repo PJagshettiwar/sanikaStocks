@@ -29,6 +29,12 @@ variable "region" {
   default     = "ap-mumbai-1"
 }
 
+variable "home_region" {
+  description = "Tenancy home region. Dynamic groups and policies must be created there."
+  type        = string
+  default     = "ap-mumbai-1"
+}
+
 variable "ssh_public_key_path" {
   description = "Path to SSH public key for instance access"
   type        = string
@@ -72,6 +78,11 @@ variable "bot_token" {
 
 variable "alert_chat_id" {
   description = "Telegram chat ID for health watchdog alerts"
+  type        = string
+}
+
+variable "ubuntu_image_ocid" {
+  description = "Pinned Ubuntu 24.04 image OCID. Take it from source_details.source_id in terraform.tfstate, not from the newest published image, or the next apply will replace the instance."
   type        = string
 }
 

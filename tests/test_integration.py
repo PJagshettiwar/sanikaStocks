@@ -235,7 +235,7 @@ async def test_low_balance_still_sends_card(db):
 # ---- R2-H2: exchange validation rejects invalid ----
 
 @pytest.mark.asyncio
-async def test_exchange_validation_rejects_invalid():
+async def test_exchange_validation_overrides_to_nse():
     llm_response = json.dumps({
         "symbol": "GOLD", "exchange": "MCX", "action": "BUY",
         "entry_min": 50000.0, "entry_max": 50500.0, "stop_loss": 49000.0,
@@ -248,7 +248,8 @@ async def test_exchange_validation_rejects_invalid():
         "Buy GOLD above 50000", context_messages=[],
         model="test-model", http_client=client,
     )
-    assert result is None
+    assert result is not None
+    assert result["exchange"] == "NSE"
 
 
 # ---- R2-M2: targets validation normalizes ----

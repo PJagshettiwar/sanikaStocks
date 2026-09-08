@@ -10,8 +10,7 @@ import pyotp
 from brokers.base import BrokerInterface, Order, OrderResult, Position, Quote
 
 BASE_URL = "https://api.indstocks.com"
-ALGO_ID_NSE = "99999"
-ALGO_ID_BSE = "9999999999999999"
+ALGO_ID = "99999"
 log = logging.getLogger(__name__)
 
 RETRYABLE_STATUSES = {500, 502, 503, 504}
@@ -118,11 +117,16 @@ class INDstocksBroker(BrokerInterface):
             return self._instrument_cache
         resp = await self._request("GET", f"{BASE_URL}/market/instruments", params={"source": "equity"})
         reader = csv.DictReader(io.StringIO(resp.text))
+        new_cache: dict[str, str] = {}
         for row in reader:
+            exchange = row.get("EXCH", "").strip()
+            if exchange != "NSE":
+                continue
             symbol = row.get("TRADING_SYMBOL", "").strip()
             sec_id = row.get("SECURITY_ID", "").strip()
             if symbol and sec_id:
-                self._instrument_cache[symbol] = sec_id
+                new_cache[symbol] = sec_id
+        self._instrument_cache = new_cache
         self._instrument_cache_time = time.monotonic()
         return self._instrument_cache
 
@@ -143,12 +147,12 @@ class INDstocksBroker(BrokerInterface):
         sec_id = instruments.get(symbol)
         if not sec_id:
             raise ValueError(f"Unknown symbol: {symbol}")
-        scrip_code = f"{exchange}_{sec_id}"
+        scrip_code = f"NSE_{sec_id}"
         resp = await self._request("GET", f"{BASE_URL}/market/quotes/full", params={"scrip-codes": scrip_code})
         quote_data = resp.json()["data"][scrip_code]
         return Quote(
             symbol=symbol,
-            exchange=exchange,
+            exchange="NSE",
             price=quote_data["live_price"],
             volume=quote_data.get("volume", 0),
             day_high=quote_data.get("day_high", 0),
@@ -156,17 +160,18 @@ class INDstocksBroker(BrokerInterface):
         )
 
     async def place_order(self, order: Order) -> OrderResult:
-        algo_id = ALGO_ID_NSE if order.exchange == "NSE" else ALGO_ID_BSE
+        if order.qty < 1:
+            raise ValueError(f"Order quantity must be >= 1, got {order.qty}")
         payload = {
             "txn_type": order.txn_type,
-            "exchange": order.exchange,
+            "exchange": "NSE",
             "segment": "EQUITY",
             "product": order.product,
             "order_type": order.order_type,
             "validity": order.validity,
             "security_id": order.security_id,
             "qty": order.qty,
-            "algo_id": algo_id,
+            "algo_id": ALGO_ID,
         }
         if order.limit_price is not None and order.order_type == "LIMIT":
             payload["limit_price"] = order.limit_price

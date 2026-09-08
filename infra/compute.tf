@@ -1,12 +1,3 @@
-data "oci_core_images" "ubuntu" {
-  compartment_id           = var.compartment_id
-  operating_system         = "Canonical Ubuntu"
-  operating_system_version = "24.04"
-  shape                    = var.instance_shape
-  sort_by                  = "TIMECREATED"
-  sort_order               = "DESC"
-}
-
 resource "oci_core_instance" "stock_agent" {
   compartment_id      = var.compartment_id
   display_name        = "stock-agent"
@@ -20,7 +11,7 @@ resource "oci_core_instance" "stock_agent" {
 
   source_details {
     source_type             = "image"
-    source_id               = data.oci_core_images.ubuntu.images[0].id
+    source_id               = var.ubuntu_image_ocid
     boot_volume_size_in_gbs = var.boot_volume_gb
   }
 
@@ -31,11 +22,24 @@ resource "oci_core_instance" "stock_agent" {
 
   metadata = {
     ssh_authorized_keys = file(var.ssh_public_key_path)
-    user_data           = base64encode(templatefile("${path.module}/cloud-init/setup.sh", {
+    user_data = base64encode(templatefile("${path.module}/cloud-init/setup.sh", {
       repo_url      = var.repo_url
       bot_token     = var.bot_token
       alert_chat_id = var.alert_chat_id
     }))
+  }
+
+  # data/ lives on this box's boot volume: the SQLite database and the Telegram
+  # session file, and the session can only be recreated by an interactive login.
+  # Nothing is worth replacing this instance for, so make Terraform refuse.
+  #
+  # ignore_changes covers user_data, which only runs at first boot. It also
+  # freezes ssh_authorized_keys, because metadata is one map and Terraform
+  # cannot ignore a single key. Add SSH keys by editing authorized_keys on the
+  # box; changing ssh_public_key_path here will look clean and do nothing.
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes  = [metadata]
   }
 }
 
@@ -58,6 +62,11 @@ resource "oci_core_public_ip" "stock_agent" {
   display_name   = "stock-agent-ip"
   lifetime       = "RESERVED"
   private_ip_id  = data.oci_core_private_ips.stock_agent.private_ips[0].id
+
+  # This address is whitelisted with INDstocks. Losing it is not recoverable.
+  lifecycle {
+    prevent_destroy = true
+  }
 }
 
 data "oci_core_private_ips" "stock_agent" {

@@ -8,6 +8,11 @@ output "ssh_command" {
   value       = "ssh -i ${replace(var.ssh_public_key_path, ".pub", "")} ubuntu@${oci_core_public_ip.stock_agent.ip_address}"
 }
 
+output "container_log_search_path" {
+  description = "What logs.sh passes to oci logging-search"
+  value       = "${var.compartment_id}/${oci_logging_log_group.stock_agent.id}/${oci_logging_log.container.id}"
+}
+
 output "instance_ocid" {
   description = "Compute instance OCID for OCI console reference"
   value       = oci_core_instance.stock_agent.id

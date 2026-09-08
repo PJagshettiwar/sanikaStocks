@@ -9,12 +9,17 @@ private_key_path = "~/.oci/oci_api_key.pem"
 ssh_public_key_path = "~/.ssh/oracle_cloud.pub"
 allowed_ssh_cidr    = "YOUR_HOME_IP/32"
 
+# Pinned OS image. Read source_details.source_id out of terraform.tfstate for
+# an existing box. Using the newest published image plans a replacement.
+ubuntu_image_ocid = "ocid1.image.oc1.ap-mumbai-1..."
+
 # Telegram Watchdog
-bot_token    = "your_telegram_bot_token"
+bot_token     = "your_telegram_bot_token"
 alert_chat_id = "your_chat_id"
 
 # Defaults (uncomment to override)
 # region            = "ap-mumbai-1"
+# home_region       = "ap-mumbai-1"
 # instance_shape    = "VM.Standard.A1.Flex"
 # instance_ocpus    = 1
 # instance_memory_gb = 6

@@ -3,7 +3,6 @@ import yfinance as yf
 from brokers.base import BrokerInterface, Quote
 
 NSE_SUFFIX = ".NS"
-BSE_SUFFIX = ".BO"
 
 
 async def get_quote(symbol: str, exchange: str, broker: BrokerInterface | None = None) -> Quote:
@@ -16,15 +15,14 @@ async def get_quote(symbol: str, exchange: str, broker: BrokerInterface | None =
 
 
 async def _yfinance_quote(symbol: str, exchange: str) -> Quote:
-    suffix = NSE_SUFFIX if exchange == "NSE" else BSE_SUFFIX
-    ticker_symbol = f"{symbol}{suffix}"
+    ticker_symbol = f"{symbol}{NSE_SUFFIX}"
 
     def _fetch():
         ticker = yf.Ticker(ticker_symbol)
         info = ticker.fast_info
         return Quote(
             symbol=symbol,
-            exchange=exchange,
+            exchange="NSE",
             price=float(info.last_price),
             volume=int(info.last_volume or 0),
             day_high=float(info.day_high or 0),

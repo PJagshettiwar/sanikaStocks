@@ -1,3 +1,5 @@
+import time
+
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
@@ -99,7 +101,7 @@ async def test_403_triggers_reauth_and_retry():
 
 @pytest.mark.asyncio
 async def test_get_instruments_parses_csv():
-    csv_content = "TRADING_SYMBOL,SECURITY_ID,OTHER\nRELIANCE,2885,x\nINFY,5678,y\n"
+    csv_content = "EXCH,TRADING_SYMBOL,SECURITY_ID,OTHER\nNSE,RELIANCE,2885,x\nNSE,INFY,5678,y\nBSE,RELIANCE,500325,z\n"
     mock_response = httpx.Response(
         200, text=csv_content,
         request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"),
@@ -114,11 +116,33 @@ async def test_get_instruments_parses_csv():
 
     assert instruments["RELIANCE"] == "2885"
     assert instruments["INFY"] == "5678"
+    assert len(instruments) == 2
+
+
+@pytest.mark.asyncio
+async def test_get_instruments_clears_stale_entries():
+    csv_v1 = "EXCH,TRADING_SYMBOL,SECURITY_ID,OTHER\nNSE,RELIANCE,2885,x\nNSE,DELISTED,9999,y\n"
+    csv_v2 = "EXCH,TRADING_SYMBOL,SECURITY_ID,OTHER\nNSE,RELIANCE,2885,x\n"
+    resp_v1 = httpx.Response(200, text=csv_v1, request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"))
+    resp_v2 = httpx.Response(200, text=csv_v2, request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"))
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(side_effect=[resp_v1, resp_v2])
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
+    instruments = await broker.get_instruments()
+    assert "DELISTED" in instruments
+
+    broker._instrument_cache_time = time.monotonic() - 86401
+    instruments = await broker.get_instruments()
+    assert "DELISTED" not in instruments
+    assert instruments["RELIANCE"] == "2885"
 
 
 @pytest.mark.asyncio
 async def test_get_instruments_caches_result():
-    csv_content = "TRADING_SYMBOL,SECURITY_ID,OTHER\nRELIANCE,2885,x\n"
+    csv_content = "EXCH,TRADING_SYMBOL,SECURITY_ID,OTHER\nNSE,RELIANCE,2885,x\n"
     mock_response = httpx.Response(
         200, text=csv_content,
         request=httpx.Request("GET", "https://api.indstocks.com/market/instruments"),
@@ -335,3 +359,17 @@ async def test_place_order_never_retries(monkeypatch, failure):
     with pytest.raises(expected):
         await broker.place_order(_order())
     assert client.request.call_count == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bad_qty", [0, -1])
+async def test_place_order_rejects_invalid_qty(bad_qty):
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test")
+    broker._token = "valid_token"
+    broker._headers["Authorization"] = "valid_token"
+    order = Order(
+        symbol="RELIANCE", exchange="NSE", security_id="2885", txn_type="BUY",
+        qty=bad_qty, order_type="LIMIT", limit_price=1490.0, product="CNC", validity="DAY",
+    )
+    with pytest.raises(ValueError, match="must be >= 1"):
+        await broker.place_order(order)

@@ -100,10 +100,10 @@ if [ -f "$COOLDOWN_FILE" ]; then
   COOLDOWN_TS=$(cat "$COOLDOWN_FILE" 2>/dev/null | tr -d '[:space:]')
   if [ -n "$COOLDOWN_TS" ] && echo "$COOLDOWN_TS" | grep -qE '^[0-9]+'; then
     NOW_TS=$(date +%s)
-    AGE=$(( NOW_TS - ${COOLDOWN_TS%%.*} ))
+    AGE=$(( NOW_TS - $${COOLDOWN_TS%%.*} ))
     if [ "$AGE" -lt 1800 ]; then
       REMAINING=$(( 1800 - AGE ))
-      send_alert "⏸ <b>[$HOSTNAME] Auth cooldown active</b>%0ARate limited by broker. ${REMAINING}s remaining. Skipping restart."
+      send_alert "⏸ <b>[$HOSTNAME] Auth cooldown active</b>%0ARate limited by broker. $${REMAINING}s remaining. Skipping restart."
       exit 0
     else
       rm -f "$COOLDOWN_FILE"

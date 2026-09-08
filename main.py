@@ -251,6 +251,49 @@ async def handle_costs_command():
     await bot_client.send_message(config.APPROVAL_CHAT_ID, "\n".join(lines))
 
 
+TELEGRAM_START_ATTEMPTS = 5
+AUTH_COOLDOWN_SECONDS = 1800
+
+
+async def wait_out_auth_cooldown(cooldown_file):
+    # Waiting beats exiting: on exit Docker restarts us straight back into the
+    # same check, so the container would spin until the cooldown expired.
+    if not os.path.exists(cooldown_file):
+        return
+    try:
+        with open(cooldown_file) as f:
+            cooldown_ts = float(f.read().strip())
+        remaining = AUTH_COOLDOWN_SECONDS - (datetime.now(timezone.utc).timestamp() - cooldown_ts)
+        if remaining > 0:
+            log.warning("Auth cooldown active, waiting %.0fs before starting.", remaining)
+            await asyncio.sleep(remaining)
+            log.info("Auth cooldown expired, proceeding.")
+    except (ValueError, OSError):
+        pass
+    try:
+        os.remove(cooldown_file)
+    except OSError:
+        pass
+
+
+async def start_telegram_client(client, **start_kwargs):
+    # Telegram answers GetState with RPC_CALL_FAIL for minutes at a time. Without
+    # this the process dies and Docker's restart budget runs out for good.
+    for attempt in range(TELEGRAM_START_ATTEMPTS):
+        try:
+            await client.start(**start_kwargs)
+            return
+        except EOFError:
+            raise
+        except Exception as e:
+            if attempt == TELEGRAM_START_ATTEMPTS - 1:
+                raise
+            delay = min(15 * (2 ** attempt), 300)
+            log.warning("Telegram start failed (attempt %d/%d): %s. Retrying in %ds",
+                        attempt + 1, TELEGRAM_START_ATTEMPTS, e, delay)
+            await asyncio.sleep(delay)
+
+
 async def main():
     global user_client, bot_client, db_conn, http_client, broker
 
@@ -264,20 +307,7 @@ async def main():
         await cleanup_old_audit_logs(db_conn)
 
         cooldown_file = "data/.auth_cooldown"
-        if os.path.exists(cooldown_file):
-            try:
-                with open(cooldown_file) as f:
-                    cooldown_ts = float(f.read().strip())
-                age = datetime.now(timezone.utc).timestamp() - cooldown_ts
-                if age < 1800:
-                    log.error("Auth cooldown active (%.0fs remaining). Exiting cleanly.", 1800 - age)
-                    return
-            except (ValueError, OSError):
-                pass
-            try:
-                os.remove(cooldown_file)
-            except OSError:
-                pass
+        await wait_out_auth_cooldown(cooldown_file)
 
         broker = INDstocksBroker(
             client_id=config.INDSTOCKS_CLIENT_ID,
@@ -308,7 +338,7 @@ async def main():
             config.TELEGRAM_API_ID,
             config.TELEGRAM_API_HASH,
         )
-        await bot_client.start(bot_token=config.TELEGRAM_BOT_TOKEN)
+        await start_telegram_client(bot_client, bot_token=config.TELEGRAM_BOT_TOKEN)
         log.info("Bot client connected")
 
         await bot_client.send_message(
@@ -323,7 +353,7 @@ async def main():
                 config.TELEGRAM_API_ID,
                 config.TELEGRAM_API_HASH,
             )
-            await user_client.start()
+            await start_telegram_client(user_client)
             # Bare numeric IDs only resolve if the entity is cached; dialogs populate that cache.
             await user_client.get_dialogs()
             log.info("User client connected")
