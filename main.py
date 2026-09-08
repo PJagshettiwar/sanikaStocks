@@ -443,7 +443,17 @@ async def main():
         await poll_channels()
 
         log.info("Listening for approval replies...")
-        await bot_client.run_until_disconnected()
+        while True:
+            try:
+                await bot_client.run_until_disconnected()
+                break
+            except (ValueError, ConnectionError, OSError) as exc:
+                log.warning("Bot keepalive failed (%s), reconnecting in 60s...", exc)
+                await asyncio.sleep(60)
+                try:
+                    await bot_client.connect()
+                except Exception as reconn_exc:
+                    log.warning("Reconnect failed (%s), will retry in 60s", reconn_exc)
     finally:
         if http_client:
             await http_client.aclose()
