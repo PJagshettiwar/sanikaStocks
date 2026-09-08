@@ -15,6 +15,7 @@ docs/SECURITY_AUDIT_*.md
 infra/.terraform/
 infra/*.tfstate
 infra/*.tfstate.backup
+infra/.terraform.tfstate.lock.info
 infra/*.tfvars
 !infra/terraform.tfvars.example
 

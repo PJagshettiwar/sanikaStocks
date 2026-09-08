@@ -31,7 +31,7 @@ resource "oci_core_security_list" "stock_agent" {
   ingress_security_rules {
     protocol    = "6" # TCP
     source      = var.allowed_ssh_cidr
-    description = "SSH from home IP"
+    description = "SSH from the laptop's current IP, managed by ssh-connect.sh"
     tcp_options {
       min = 22
       max = 22
@@ -42,6 +42,12 @@ resource "oci_core_security_list" "stock_agent" {
     protocol    = "all"
     destination = "0.0.0.0/0"
     description = "Allow all outbound"
+  }
+
+  # ssh-connect.sh rewrites this rule on every connect, so Terraform must not
+  # try to put it back or plan will never come back clean.
+  lifecycle {
+    ignore_changes = [ingress_security_rules]
   }
 }
 
