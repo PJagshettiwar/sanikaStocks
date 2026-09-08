@@ -267,6 +267,7 @@ async def wait_out_auth_cooldown(cooldown_file):
         if remaining > 0:
             log.warning("Auth cooldown active, waiting %.0fs before starting.", remaining)
             await asyncio.sleep(remaining)
+            log.info("Auth cooldown expired, proceeding.")
     except (ValueError, OSError):
         pass
     try:
