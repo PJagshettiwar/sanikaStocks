@@ -1,3 +1,4 @@
+import os
 import sys
 import types
 
@@ -42,6 +43,7 @@ from approval_bot import (
     _sanitize_source,
 )
 from risk_engine import validate_signal, ValidationResult
+import config
 from stock_agent import extract_trade, detect_signal, analyze_message, _cost_tracker
 
 
@@ -386,10 +388,10 @@ async def test_cost_tracker_reset_between_tests():
     assert _cost_tracker["total_tokens"] == 10
 
 
-# ---- R2-M9: HTTP error from openrouter ----
+# ---- R2-M9: HTTP error from LLM provider ----
 
 @pytest.mark.asyncio
-async def test_http_error_from_openrouter(monkeypatch):
+async def test_http_error_from_llm(monkeypatch):
     monkeypatch.setattr("stock_agent._BASE_DELAY", 0)
     error_response = httpx.Response(
         429,
@@ -402,3 +404,56 @@ async def test_http_error_from_openrouter(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         await detect_signal("Buy RELIANCE", "m", client)
     assert client.post.call_count == 3
+
+
+# ---- Live integration tests (require GEMINI_API_KEY) ----
+# Run with: GEMINI_API_KEY=<key> pytest tests/test_integration.py -k live
+
+live = pytest.mark.skipif(
+    not os.environ.get("GEMINI_API_KEY") or os.environ.get("GEMINI_API_KEY") == "test_gemini_key",
+    reason="GEMINI_API_KEY not set",
+)
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_detects_tip():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal(
+            "Buy RELIANCE at 1450, SL 1400, Target 1550",
+            config.TIER1_MODEL,
+            client,
+        )
+    assert isinstance(result, dict)
+    assert result["is_tip"] is True
+    assert result["confidence"] >= 0.5
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_rejects_noise():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal(
+            "Good morning everyone, hope the markets are green today!",
+            config.TIER1_MODEL,
+            client,
+        )
+    assert isinstance(result, dict)
+    assert result["is_tip"] is False
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier2_extracts_signal():
+    async with httpx.AsyncClient() as client:
+        result = await extract_trade(
+            "Buy RELIANCE at 1450-1460, SL 1400, Target 1550/1600",
+            [],
+            config.TIER2_MODEL,
+            client,
+        )
+    assert isinstance(result, dict)
+    assert result["symbol"].upper() == "RELIANCE"
+    assert result["action"].upper() == "BUY"
+    assert result["entry_min"] is not None
+    assert result["stop_loss"] is not None

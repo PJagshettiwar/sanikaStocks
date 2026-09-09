@@ -1,6 +1,6 @@
 # sanikaStocks
 
-Automated stock trading agent for Indian markets (NSE/BSE). Monitors Telegram channels for trade tips, uses a 2-tier LLM pipeline (OpenRouter) to detect and extract signals, validates through a risk engine, sends approval cards via Telegram bot, and executes trades through INDstocks broker. Runs as a long-lived async Python process deployed via Docker on a Terraform-provisioned VM.
+Automated stock trading agent for Indian markets (NSE/BSE). Monitors Telegram channels for trade tips, uses a 2-tier LLM pipeline (Gemini) to detect and extract signals, validates through a risk engine, sends approval cards via Telegram bot, and executes trades through INDstocks broker. Runs as a long-lived async Python process deployed via Docker on a Terraform-provisioned VM.
 
 ## Runbooks <!-- verified: 2026-09 -->
 
@@ -65,7 +65,7 @@ infra/               — Terraform (OCI compute) + cloud-init deployment scripts
 
 - `BrokerInterface` → `brokers/base.py` — ABC for broker implementations (get_balance, get_quote, place_order, get_positions, get_instruments)
 - `ValidationResult` → `risk_engine.py` — dataclass carrying validated signal data through the pipeline
-- `_call_openrouter` → `stock_agent.py` — shared LLM call with cost tracking and JSON parsing
+- `_call_llm` → `stock_agent.py` — shared LLM call with cost tracking and JSON parsing
 - `format_trade_card` → `approval_bot.py` — renders trade approval cards for Telegram
 - `db.init_db` → `db.py` — schema creation/migration (idempotent)
 

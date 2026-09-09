@@ -47,7 +47,7 @@ connectTelegram/
   config.py              -- All configuration from .env (channels, API keys, risk defaults)
   main.py                -- Entrypoint: starts scheduler + approval listener
   telegram_reader.py     -- Fetch new messages since last_message_id per channel
-  stock_agent.py         -- Two-tier LLM pipeline (OpenRouter): detection + extraction
+  stock_agent.py         -- Two-tier LLM pipeline (Gemini): detection + extraction
   risk_engine.py         -- Deterministic validation rules, position sizing
   approval_bot.py        -- Trade card formatting, send/receive approval via bot
   market_data.py         -- Live quote fetching (INDstocks API, yfinance fallback)
@@ -67,10 +67,10 @@ connectTelegram/
 
 ### stock_agent.py (LLM Pipeline)
 
-Uses OpenRouter REST API directly (no SDK). Two-tier approach with free Nvidia models:
+Uses Gemini via OpenAI-compatible REST API (no SDK). Two-tier approach:
 
-- **Tier 1** (Nemotron 3.5 Lightning): Binary classifier. "Is this a stock tip?" Returns `{is_tip, confidence}`. Messages with confidence below 0.6 are discarded.
-- **Tier 2** (Nemotron 3 Super 120B): Structured extraction. Given the message plus the last 5 messages from the same channel for context, extracts: symbol, exchange, action, entry_min, entry_max, stop_loss, targets, allocation_pct, confidence, reasoning.
+- **Tier 1** (gemini-3.5-flash-lite): Binary classifier. "Is this a stock tip?" Returns `{is_tip, confidence}`. Messages with confidence below 0.6 are discarded.
+- **Tier 2** (gemini-3.6-flash): Structured extraction. Given the message plus the last 5 messages from the same channel for context, extracts: symbol, exchange, action, entry_min, entry_max, stop_loss, targets, allocation_pct, confidence, reasoning.
 
 Both prompts enforce JSON-only responses. Markdown code fences are stripped if present.
 
@@ -132,7 +132,7 @@ Standalone utility. Connects to Telegram using hardcoded API credentials and pri
 |---------|---------|---------|
 | telethon | 1.44.0 | Telegram client (user account for reading channels, bot for approvals) |
 | APScheduler | 3.10.4 | 10-minute polling scheduler |
-| httpx | 0.27.0 | Async HTTP client for OpenRouter and INDstocks APIs |
+| httpx | 0.27.0 | Async HTTP client for Gemini and INDstocks APIs |
 | yfinance | 0.2.40 | Market data fallback (Yahoo Finance) |
 | aiosqlite | 0.20.0 | Async SQLite |
 | python-dotenv | 1.0.1 | .env file loading |
@@ -152,7 +152,7 @@ All configuration is via environment variables loaded from a `.env` file. Copy `
 | `WATCHED_CHANNELS` | Comma-separated channel/group IDs to monitor (e.g. `-1001234567890,-1009876543210`) |
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather (used for sending approval cards) |
 | `APPROVAL_CHAT_ID` | Your chat ID with the approval bot |
-| `OPENROUTER_API_KEY` | API key from https://openrouter.ai |
+| `GEMINI_API_KEY` | API key from Google AI Studio |
 | `INDSTOCKS_TOKEN` | INDstocks API access token (expires every 24h) |
 
 ### Optional (with defaults)
@@ -160,8 +160,8 @@ All configuration is via environment variables loaded from a `.env` file. Copy `
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `TELEGRAM_SESSION_NAME` | `stock_agent` | Telethon session file name |
-| `TIER1_MODEL` | `nvidia/nemotron-3.5-lightning:free` | LLM for tip detection |
-| `TIER2_MODEL` | `nvidia/nemotron-3-super-120b-a12b:free` | LLM for trade extraction |
+| `TIER1_MODEL` | `gemini-3.5-flash-lite` | LLM for tip detection |
+| `TIER2_MODEL` | `gemini-3.6-flash` | LLM for trade extraction |
 | `DEFAULT_STOP_LOSS_PCT` | `15` | Default stop-loss percentage if tip omits it |
 | `DEFAULT_ALLOCATION_PCT` | `10` | Default portfolio allocation percentage per trade |
 | `MAX_SIGNAL_AGE_MINUTES` | `60` | Reject signals older than this |

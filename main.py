@@ -19,7 +19,7 @@ from db import (
     get_total_api_cost, get_api_cost_summary, cleanup_old_audit_logs,
 )
 from telegram_reader import fetch_new_messages
-from stock_agent import analyze_message, set_cost_db
+from stock_agent import analyze_message, detect_signal, set_cost_db
 from risk_engine import validate_signal, ValidationResult
 from approval_bot import (
     format_trade_card, send_approval, handle_approval_reply,
@@ -179,19 +179,15 @@ async def handle_status_command():
         except Exception as e2:
             checks.append(f"Broker (INDstocks): DOWN ({e2})")
 
-    provider = {"openrouter": "OpenRouter", "gemini": "Gemini"}[config.LLM_PROVIDER]
     try:
-        resp = await http_client.get(
-            f"{config.LLM_BASE_URL}/models",
-            headers={"Authorization": f"Bearer {config.LLM_API_KEY}"},
-            timeout=10,
-        )
-        if resp.status_code == 200:
-            checks.append(f"LLM ({provider}): connected")
+        result = await detect_signal("Hello, this is a test message", config.TIER1_MODEL, http_client,
+                                     context="health_check")
+        if isinstance(result, dict) and "is_tip" in result:
+            checks.append(f"LLM ({config.TIER1_MODEL}): ok")
         else:
-            checks.append(f"LLM ({provider}): error {resp.status_code}")
+            checks.append(f"LLM ({config.TIER1_MODEL}): bad response: {result}")
     except Exception as e:
-        checks.append(f"LLM ({provider}): DOWN ({e})")
+        checks.append(f"LLM ({config.TIER1_MODEL}): DOWN ({e})")
 
     pending = await get_all_pending_candidates(db_conn)
     checks.append(f"Pending trades: {len(pending)}")

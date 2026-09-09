@@ -135,12 +135,12 @@ async def _call_llm(messages, model, http_client, context=None):
         return None
 
 
-async def detect_signal(text, model, http_client):
+async def detect_signal(text, model, http_client, context="tier1_detect"):
     messages = [
         {"role": "system", "content": TIER1_SYSTEM_PROMPT},
         {"role": "user", "content": text},
     ]
-    return await _call_llm(messages, model, http_client, context="tier1_detect")
+    return await _call_llm(messages, model, http_client, context=context)
 
 
 async def extract_trade(text, context_messages, model, http_client):

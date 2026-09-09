@@ -8,7 +8,6 @@ _DEFAULTS = {
     "WATCHED_CHANNELS": "-1001234567890",
     "TELEGRAM_BOT_TOKEN": "test:token",
     "APPROVAL_CHAT_ID": "-1009876543210",
-    "OPENROUTER_API_KEY": "test_openrouter_key",
     "GEMINI_API_KEY": "test_gemini_key",
     "INDSTOCKS_CLIENT_ID": "test_client",
     "INDSTOCKS_TOTP_SECRET": "JBSWY3DPEHPK3PXP",

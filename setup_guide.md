@@ -35,11 +35,11 @@ For each of your 4 private channels:
 2. Navigate to API section
 3. Copy your access token (expires every 24h)
 
-## Step 5: OpenRouter API Key
+## Step 5: Gemini API Key
 
-1. Go to https://openrouter.ai
-2. Create an account
-3. Purchase $10 credit (unlocks 1000 req/day on free models)
+1. Go to https://aistudio.google.com/apikey
+2. Create a project or select an existing one
+3. Generate an API key
 4. Copy your API key
 
 ## Step 6: Configure .env
