@@ -50,10 +50,27 @@ def _sanitize_source(text: str, max_len: int = 200) -> str:
     return cleaned
 
 
-def format_trade_card(candidate: dict, validation: ValidationResult, original_message: str, wallet_balance: float = 0, held_symbols: set[str] | None = None) -> str:
-    targets = sorted(validation.targets)
-    price = validation.current_price
+def _signal_age_str(candidate: dict) -> str:
+    created = candidate.get("created_at")
+    if not created:
+        return "N/A"
+    try:
+        dt = datetime.fromisoformat(created)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return f"{int((datetime.now(timezone.utc) - dt).total_seconds() / 60)} min"
+    except (ValueError, TypeError):
+        return "N/A"
 
+
+def format_trade_card(candidate: dict, validation: ValidationResult, original_message: str, wallet_balance: float = 0, held_symbols: set[str] | None = None) -> str:
+    price = validation.current_price
+    age_str = _signal_age_str(candidate)
+
+    if validation.action == "SELL":
+        return _format_sell_card(candidate, validation, original_message, price, age_str)
+
+    targets = sorted(validation.targets)
     target_lines = []
     for i, t in enumerate(targets, 1):
         pct = round((t - price) / price * 100, 1) if price else 0
@@ -65,29 +82,12 @@ def format_trade_card(candidate: dict, validation: ValidationResult, original_me
         sl_pct = round((validation.stop_loss - price) / price * 100, 1) if price else 0
         sl_line = f"SL: {validation.stop_loss:,.0f} ({sl_pct:+.1f}%)\n"
 
-    no_action = ""
-    if validation.action == "SELL" and held_symbols is not None and validation.symbol not in held_symbols:
-        no_action = "No action - not in portfolio\n\n"
-
-    age_str = "N/A"
-    created = candidate.get("created_at")
-    if created:
-        try:
-            dt = datetime.fromisoformat(created)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            age_min = int((datetime.now(timezone.utc) - dt).total_seconds() / 60)
-            age_str = f"{age_min} min"
-        except (ValueError, TypeError):
-            pass
-
     qty = validation.quantity
     amount = round(qty * price, 2) if qty else 0
 
     return (
         f"--- TRADE CANDIDATE ---\n\n"
         f"{validation.symbol} ({validation.exchange}) - {validation.action}\n"
-        f"{no_action}"
         f"Entry: {validation.entry_min:,.0f} - {validation.entry_max:,.0f}\n"
         f"Current Price: {price:,.2f}\n"
         f"{sl_line}"
@@ -95,6 +95,38 @@ def format_trade_card(candidate: dict, validation: ValidationResult, original_me
         f"Qty: {qty} | Amount: {amount:,.0f}\n"
         f"Allocation: Fixed {FIXED_ALLOCATION_AMOUNT:,.0f}/trade\n"
         f"Wallet: {wallet_balance:,.0f}\n"
+        f"Signal age: {age_str}\n\n"
+        f"Source:\n\"{_sanitize_source(original_message)}\"\n\n"
+        f"Reply to this message: A to approve, R to reject\n"
+        f"---"
+    )
+
+
+def _format_sell_card(candidate: dict, validation: ValidationResult, original_message: str, price: float, age_str: str) -> str:
+    pct_label = f" {validation.sell_pct}%" if validation.sell_pct < 100 else ""
+
+    pnl_line = ""
+    if validation.avg_buy_price > 0 and price > 0:
+        pnl_per_share = price - validation.avg_buy_price
+        pnl_pct = round(pnl_per_share / validation.avg_buy_price * 100, 1)
+        sign = "+" if pnl_per_share >= 0 else ""
+        pnl_line = f"Unrealized P&L: {sign}{pnl_pct}% ({sign}{pnl_per_share:,.2f}/share)\n"
+
+    avg_line = ""
+    if validation.avg_buy_price > 0:
+        avg_line = f"Avg Buy Price: {validation.avg_buy_price:,.2f}\n"
+
+    qty = validation.quantity
+    proceeds = round(qty * price, 2) if qty else 0
+
+    return (
+        f"--- SELL CANDIDATE ---\n\n"
+        f"{validation.symbol} ({validation.exchange}) - SELL{pct_label}\n\n"
+        f"{avg_line}"
+        f"Current Price: {price:,.2f}\n"
+        f"{pnl_line}\n"
+        f"Qty to sell: {qty} of {validation.held_qty} held\n"
+        f"Est. Proceeds: {proceeds:,.0f}\n"
         f"Signal age: {age_str}\n\n"
         f"Source:\n\"{_sanitize_source(original_message)}\"\n\n"
         f"Reply to this message: A to approve, R to reject\n"
@@ -256,11 +288,17 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         await update_candidate_status(db_conn, candidate_id, "rejected")
         await save_decision(db_conn, candidate_id, "reject", None)
         _remove_pending(candidate_id)
-        await bot_client.send_message(
-            chat_id,
-            f"Rejected: {candidate.get('action', 'BUY')} {candidate['symbol']} ({candidate.get('exchange', '')}) "
-            f"@ {candidate['entry_min']:,.0f}-{candidate['entry_max']:,.0f}",
-        )
+        if candidate.get("action") == "SELL":
+            await bot_client.send_message(
+                chat_id,
+                f"Rejected: SELL {candidate['symbol']} ({candidate.get('exchange', '')})",
+            )
+        else:
+            await bot_client.send_message(
+                chat_id,
+                f"Rejected: {candidate.get('action', 'BUY')} {candidate['symbol']} ({candidate.get('exchange', '')}) "
+                f"@ {candidate['entry_min']:,.0f}-{candidate['entry_max']:,.0f}",
+            )
         return "finalized"
 
     log.info("Approval received for #%d (%s %s)", candidate_id, candidate["action"], candidate["symbol"])
@@ -272,22 +310,6 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
         return "market_closed"
 
     try:
-        balance = await broker.get_balance()
-    except Exception as e:
-        log.error("Broker balance check failed: %s", e)
-        await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
-        return "error"
-
-    log.info("Balance for #%d: %.0f available", candidate_id, balance)
-
-    if balance < FIXED_ALLOCATION_AMOUNT:
-        await bot_client.send_message(
-            chat_id,
-            f"Insufficient funds: {balance:,.0f} available, need {FIXED_ALLOCATION_AMOUNT:,.0f}.\nAdd funds and reply A again to this card.",
-        )
-        return "insufficient_funds"
-
-    try:
         quote = await broker.get_quote(candidate["symbol"], candidate["exchange"])
     except Exception as e:
         log.error("Quote fetch failed for %s: %s", candidate["symbol"], e)
@@ -296,48 +318,70 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
 
     log.info("Quote for #%d %s: %.2f", candidate_id, candidate["symbol"], quote.price)
 
-    entry_min = candidate["entry_min"]
-    entry_max = candidate["entry_max"]
+    is_sell = candidate.get("action") == "SELL"
 
-    qty = math.floor(FIXED_ALLOCATION_AMOUNT / quote.price)
-    if qty < 1:
-        await bot_client.send_message(chat_id, f"Price {quote.price:,.0f} exceeds allocation {FIXED_ALLOCATION_AMOUNT:,.0f}.")
-        return "error"
-    amount = round(qty * quote.price, 2)
+    if is_sell:
+        qty, amount, balance = await _resolve_sell_qty(candidate, quote, broker, bot_client, chat_id)
+        if qty is None:
+            return "error"
+    else:
+        try:
+            balance = await broker.get_balance()
+        except Exception as e:
+            log.error("Broker balance check failed: %s", e)
+            await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
+            return "error"
 
-    if quote.price < entry_min or quote.price > entry_max:
-        sl_str = f"SL: {candidate['stop_loss']:,.0f}\n" if candidate['stop_loss'] is not None else ""
-        raw_targets = candidate.get("targets", "[]")
-        targets = json.loads(raw_targets) if isinstance(raw_targets, str) else raw_targets
-        target_lines = []
-        for i, t in enumerate(sorted(targets), 1):
-            pct = round((t - quote.price) / quote.price * 100, 1) if quote.price else 0
-            target_lines.append(f"T{i}: {t:,.0f} ({pct:+.1f}%)")
-        targets_str = " | ".join(target_lines) if target_lines else "N/A"
-        source = _sanitize_source(candidate.get("original_message", ""))
-        reapproval_card = (
-            f"--- PRICE CHANGED ---\n\n"
-            f"{candidate['symbol']} ({candidate['exchange']}) - {candidate.get('action', 'BUY')}\n"
-            f"Original entry: {entry_min:,.0f} - {entry_max:,.0f}\n"
-            f"Current price: {quote.price:,.2f}\n"
-            f"{sl_str}"
-            f"Targets: {targets_str}\n"
-            f"New qty: {qty} | Amount: {amount:,.0f}\n"
-            f"Wallet: {balance:,.0f}\n\n"
-            f"Source:\n\"{source}\"\n\n"
-            f"Reply to this message: A to approve at current price, R to reject\n"
-            f"---"
-        )
-        from db import update_candidate_entry_range
-        margin = quote.price * 0.01
-        await update_candidate_entry_range(db_conn, candidate_id, quote.price - margin, quote.price + margin)
-        msg = await bot_client.send_message(chat_id, reapproval_card)
-        _remove_pending(candidate_id)
-        _msg_to_candidate[msg.id] = candidate_id
-        await set_telegram_msg_id(db_conn, candidate_id, msg.id)
-        log.info("Price changed for #%d %s: %.2f outside %.0f-%.0f, reapproval sent",
-                 candidate_id, candidate["symbol"], quote.price, entry_min, entry_max)
-        return "reapproval_sent"
+        log.info("Balance for #%d: %.0f available", candidate_id, balance)
+
+        if balance < FIXED_ALLOCATION_AMOUNT:
+            await bot_client.send_message(
+                chat_id,
+                f"Insufficient funds: {balance:,.0f} available, need {FIXED_ALLOCATION_AMOUNT:,.0f}.\nAdd funds and reply A again to this card.",
+            )
+            return "insufficient_funds"
+
+        qty = math.floor(FIXED_ALLOCATION_AMOUNT / quote.price)
+        if qty < 1:
+            await bot_client.send_message(chat_id, f"Price {quote.price:,.0f} exceeds allocation {FIXED_ALLOCATION_AMOUNT:,.0f}.")
+            return "error"
+        amount = round(qty * quote.price, 2)
+
+        entry_min = candidate["entry_min"]
+        entry_max = candidate["entry_max"]
+        if quote.price < entry_min or quote.price > entry_max:
+            sl_str = f"SL: {candidate['stop_loss']:,.0f}\n" if candidate['stop_loss'] is not None else ""
+            raw_targets = candidate.get("targets", "[]")
+            targets = json.loads(raw_targets) if isinstance(raw_targets, str) else raw_targets
+            target_lines = []
+            for i, t in enumerate(sorted(targets), 1):
+                pct = round((t - quote.price) / quote.price * 100, 1) if quote.price else 0
+                target_lines.append(f"T{i}: {t:,.0f} ({pct:+.1f}%)")
+            targets_str = " | ".join(target_lines) if target_lines else "N/A"
+            source = _sanitize_source(candidate.get("original_message", ""))
+            reapproval_card = (
+                f"--- PRICE CHANGED ---\n\n"
+                f"{candidate['symbol']} ({candidate['exchange']}) - {candidate.get('action', 'BUY')}\n"
+                f"Original entry: {entry_min:,.0f} - {entry_max:,.0f}\n"
+                f"Current price: {quote.price:,.2f}\n"
+                f"{sl_str}"
+                f"Targets: {targets_str}\n"
+                f"New qty: {qty} | Amount: {amount:,.0f}\n"
+                f"Wallet: {balance:,.0f}\n\n"
+                f"Source:\n\"{source}\"\n\n"
+                f"Reply to this message: A to approve at current price, R to reject\n"
+                f"---"
+            )
+            from db import update_candidate_entry_range
+            margin = quote.price * 0.01
+            await update_candidate_entry_range(db_conn, candidate_id, quote.price - margin, quote.price + margin)
+            msg = await bot_client.send_message(chat_id, reapproval_card)
+            _remove_pending(candidate_id)
+            _msg_to_candidate[msg.id] = candidate_id
+            await set_telegram_msg_id(db_conn, candidate_id, msg.id)
+            log.info("Price changed for #%d %s: %.2f outside %.0f-%.0f, reapproval sent",
+                     candidate_id, candidate["symbol"], quote.price, entry_min, entry_max)
+            return "reapproval_sent"
 
     from db import get_candidate_status as _get_status
     current_status = await _get_status(db_conn, candidate_id)
@@ -388,7 +432,7 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
             quantity=order.qty, price=quote.price, order_id=result.order_id,
             broker_charges=10.0,
         )
-        if candidate["action"] == "SELL":
+        if is_sell and candidate.get("sell_pct", 100) == 100:
             from db import get_open_buy_trade
             buy_trade_id = await get_open_buy_trade(db_conn, candidate["symbol"])
             if buy_trade_id:
@@ -411,10 +455,10 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
     _remove_pending(candidate_id)
     confirm_lines = [
         f"Order placed: {candidate['symbol']} {candidate['action']} x{order.qty} @ {quote.price:,.2f}",
-        f"Amount: {amount:,.0f} | Wallet: {balance - amount:,.0f}",
+        f"Amount: {amount:,.0f}",
         f"Order ID: {result.order_id} | Status: {result.status}",
     ]
-    if candidate["action"] == "SELL":
+    if is_sell:
         try:
             pnl_data = await get_symbol_pnl(db_conn, candidate["symbol"])
             if pnl_data["trade_count"] > 0:
@@ -425,9 +469,34 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
                 )
         except Exception:
             pass
+    else:
+        confirm_lines.append(f"Wallet: {balance - amount:,.0f}")
     await bot_client.send_message(chat_id, "\n".join(confirm_lines))
     asyncio.create_task(verify_order_fill(
         result.order_id, candidate["symbol"], candidate["action"], order.qty,
         broker, bot_client, chat_id, db_conn, candidate_id,
     ))
     return "finalized"
+
+
+async def _resolve_sell_qty(candidate, quote, broker, bot_client, chat_id):
+    sell_pct = candidate.get("sell_pct", 100)
+    try:
+        positions = await broker.get_positions()
+    except Exception as e:
+        log.error("Broker positions check failed: %s", e)
+        await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
+        return None, None, None
+    held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
+    if not held or held.net_qty <= 0:
+        await bot_client.send_message(chat_id, f"No position held for {candidate['symbol']}.")
+        return None, None, None
+    qty = math.floor(held.net_qty * sell_pct / 100)
+    if qty < 1:
+        await bot_client.send_message(
+            chat_id,
+            f"Cannot sell {sell_pct}% of {held.net_qty} {candidate['symbol']} (rounds to 0 shares).",
+        )
+        return None, None, None
+    amount = round(qty * quote.price, 2)
+    return qty, amount, 0

@@ -22,6 +22,9 @@ class ValidationResult:
     entry_max: float = 0.0
     targets: list[float] = field(default_factory=list)
     current_price: float = 0.0
+    sell_pct: int = 100
+    avg_buy_price: float = 0.0
+    held_qty: int = 0
 
 
 def _fail(reason):
@@ -54,17 +57,49 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
         return _fail(f"Unknown symbol: {signal['symbol']}")
     security_id = instruments[resolved]
 
-    stop_loss = signal.get("stop_loss")
-    entry_max = signal["entry_max"]
-    if stop_loss is None:
-        stop_loss = round(entry_max * (1 - DEFAULT_STOP_LOSS_PCT / 100), 2)
-
     msg_time = datetime.fromisoformat(message_timestamp)
     if msg_time.tzinfo is None:
         msg_time = msg_time.replace(tzinfo=timezone.utc)
     age = datetime.now(timezone.utc) - msg_time
     if age > timedelta(minutes=MAX_SIGNAL_AGE_MINUTES):
         return _fail(f"Signal too old: {int(age.total_seconds() // 60)} min")
+
+    action = signal["action"]
+    quote = await broker.get_quote(resolved, signal["exchange"])
+
+    if action == "SELL":
+        sell_pct = signal.get("sell_pct", 100)
+        positions = await broker.get_positions()
+        held = next((p for p in positions if p.symbol == resolved), None)
+        if not held or held.net_qty <= 0:
+            return _fail(f"No position held for {resolved}")
+        quantity = math.floor(held.net_qty * sell_pct / 100)
+        if quantity < 1:
+            return _fail(f"Cannot sell {sell_pct}% of {held.net_qty} {resolved} (rounds to 0 shares)")
+        amount = round(quantity * quote.price, 2)
+        return ValidationResult(
+            valid=True,
+            reason="All checks passed",
+            symbol=resolved,
+            exchange=signal["exchange"],
+            action=action,
+            security_id=security_id,
+            quantity=quantity,
+            amount=amount,
+            stop_loss=0,
+            entry_min=0,
+            entry_max=0,
+            targets=[],
+            current_price=quote.price,
+            sell_pct=sell_pct,
+            avg_buy_price=held.avg_price,
+            held_qty=held.net_qty,
+        )
+
+    stop_loss = signal.get("stop_loss")
+    entry_max = signal["entry_max"]
+    if stop_loss is None:
+        stop_loss = round(entry_max * (1 - DEFAULT_STOP_LOSS_PCT / 100), 2)
 
     if await has_duplicate_signal(db_conn, resolved, channel_id):
         return _fail(f"Duplicate signal for {resolved} in last 24h")
@@ -73,25 +108,14 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
     if today_count >= MAX_DAILY_TRADES:
         return _fail(f"Daily trade limit reached: {today_count}/{MAX_DAILY_TRADES}")
 
-    action = signal["action"]
-    quote = await broker.get_quote(resolved, signal["exchange"])
-
-    if action == "SELL":
-        positions = await broker.get_positions()
-        held = next((p for p in positions if p.symbol == resolved), None)
-        if not held or held.net_qty <= 0:
-            return _fail(f"No position held for {resolved}")
-        quantity = held.net_qty
-        amount = round(quantity * quote.price, 2)
-    else:
-        quantity = math.floor(FIXED_ALLOCATION_AMOUNT / entry_max)
-        if quantity < 1:
-            max_single_share = FIXED_ALLOCATION_AMOUNT * 2
-            if entry_max <= max_single_share:
-                quantity = 1
-            else:
-                return _fail(f"Price too high: {entry_max:,.0f} > {max_single_share:,.0f}")
-        amount = round(quantity * entry_max, 2)
+    quantity = math.floor(FIXED_ALLOCATION_AMOUNT / entry_max)
+    if quantity < 1:
+        max_single_share = FIXED_ALLOCATION_AMOUNT * 2
+        if entry_max <= max_single_share:
+            quantity = 1
+        else:
+            return _fail(f"Price too high: {entry_max:,.0f} > {max_single_share:,.0f}")
+    amount = round(quantity * entry_max, 2)
 
     return ValidationResult(
         valid=True,
@@ -107,4 +131,5 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
         entry_max=entry_max,
         targets=signal.get("targets", []),
         current_price=quote.price,
+        sell_pct=0,
     )

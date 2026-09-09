@@ -197,6 +197,7 @@ async def test_sell_closes_buy_trade(db):
     })
     sell_cand_id = await save_trade_candidate(
         db, sell_sig_id, "RELIANCE", 3, 4590.0, 0, 1530.0, 1520.0, 1530.0,
+        sell_pct=100, avg_buy_price=1486.0, held_qty=3,
     )
 
     broker = _make_broker(price=1525.0)
@@ -358,6 +359,7 @@ async def test_limit_price_has_buffer(db):
     })
     sell_cand_id = await save_trade_candidate(
         db, sell_sig_id, "RELIANCE", 3, 4458.0, 0, 1486.0, 1482.0, 1490.0,
+        sell_pct=100, avg_buy_price=1486.0, held_qty=3,
     )
     broker2 = _make_broker(price=1486.0)
     broker2.get_positions.return_value = [
@@ -457,3 +459,76 @@ async def test_live_tier2_extracts_signal():
     assert result["action"].upper() == "BUY"
     assert result["entry_min"] is not None
     assert result["stop_loss"] is not None
+
+
+# ---- Live sell/exit scenario tests ----
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_detects_exit_as_tip():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal("Exit Caplin Point", config.TIER1_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["is_tip"] is True
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_detects_partial_exit_as_tip():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal("Exit 50% Caplin Point", config.TIER1_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["is_tip"] is True
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_detects_book_profits_as_tip():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal("Book profits in Infosys", config.TIER1_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["is_tip"] is True
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier1_rejects_hold_message():
+    async with httpx.AsyncClient() as client:
+        result = await detect_signal("Hold Caplin Point, trail SL to 1400", config.TIER1_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["is_tip"] is False
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier2_extracts_full_exit():
+    async with httpx.AsyncClient() as client:
+        result = await extract_trade("Exit Caplin Point", [], config.TIER2_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["action"] == "SELL"
+    assert result["sell_pct"] == 100
+    assert result["entry_min"] == 0
+    assert result["entry_max"] == 0
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier2_extracts_partial_exit():
+    async with httpx.AsyncClient() as client:
+        result = await extract_trade("Exit 50% Caplin Point", [], config.TIER2_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["action"] == "SELL"
+    assert result["sell_pct"] == 50
+
+
+@live
+@pytest.mark.asyncio
+async def test_live_tier2_extracts_book_partial_profits():
+    async with httpx.AsyncClient() as client:
+        result = await extract_trade("Book 50% profits in Infosys", [], config.TIER2_MODEL, client)
+    assert isinstance(result, dict)
+    assert result["action"] == "SELL"
+    assert result["sell_pct"] == 50
+    sym = result["symbol"].upper()
+    assert sym in ("INFY", "INFOSYS")

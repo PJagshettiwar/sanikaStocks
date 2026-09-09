@@ -88,6 +88,11 @@ async def poll_channels():
             )
             if not validation.valid:
                 log.info("Signal rejected: %s", validation.reason)
+                if signal.get("action") == "SELL":
+                    await bot_client.send_message(
+                        config.APPROVAL_CHAT_ID,
+                        f"{signal['symbol']} ({signal.get('exchange', 'NSE')}) - SELL rejected\n{validation.reason}",
+                    )
                 continue
 
             balance = await broker.get_balance()
@@ -98,6 +103,8 @@ async def poll_channels():
                 db_conn, signal_id, validation.symbol, validation.quantity,
                 validation.amount, validation.stop_loss, validation.current_price,
                 validation.entry_min, validation.entry_max,
+                sell_pct=validation.sell_pct, avg_buy_price=validation.avg_buy_price,
+                held_qty=validation.held_qty,
             )
 
             card = format_trade_card(
@@ -147,17 +154,32 @@ async def handle_pending_command():
             quote = await broker.get_quote(row["symbol"], row["exchange"])
             price = quote.price
         except Exception:
-            price = row["entry_max"]
+            price = row["entry_max"] or 0
 
-        qty = max(1, math.floor(FIXED_ALLOCATION_AMOUNT / price))
-        validation = ValidationResult(
-            valid=True, reason="ok",
-            symbol=row["symbol"], exchange=row["exchange"], action=row["action"],
-            entry_min=row["entry_min"], entry_max=row["entry_max"],
-            stop_loss=row["stop_loss"] or 0, targets=targets,
-            current_price=price, quantity=qty,
-            amount=round(qty * price, 2),
-        )
+        is_sell = row.get("action") == "SELL"
+        if is_sell:
+            sell_pct = row.get("sell_pct", 100)
+            held_qty = row.get("held_qty", 0)
+            avg_buy_price = row.get("avg_buy_price", 0)
+            qty = max(1, math.floor(held_qty * sell_pct / 100)) if held_qty > 0 else 0
+            validation = ValidationResult(
+                valid=True, reason="ok",
+                symbol=row["symbol"], exchange=row["exchange"], action="SELL",
+                entry_min=0, entry_max=0, stop_loss=0, targets=[],
+                current_price=price, quantity=qty,
+                amount=round(qty * price, 2),
+                sell_pct=sell_pct, avg_buy_price=avg_buy_price, held_qty=held_qty,
+            )
+        else:
+            qty = max(1, math.floor(FIXED_ALLOCATION_AMOUNT / price)) if price > 0 else 0
+            validation = ValidationResult(
+                valid=True, reason="ok",
+                symbol=row["symbol"], exchange=row["exchange"], action=row["action"],
+                entry_min=row["entry_min"], entry_max=row["entry_max"],
+                stop_loss=row["stop_loss"] or 0, targets=targets,
+                current_price=price, quantity=qty,
+                amount=round(qty * price, 2),
+            )
         candidate = {"id": row["id"], "created_at": row["created_at"]}
         card = format_trade_card(candidate, validation, row["original_message"],
                                  wallet_balance=balance, held_symbols=held)

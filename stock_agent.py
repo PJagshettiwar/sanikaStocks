@@ -11,8 +11,9 @@ from config import LLM_BASE_URL, LLM_API_KEY, LLM_PROVIDER
 TIER1_SYSTEM_PROMPT = """You are a stock tip detector for Indian stock markets (NSE).
 Respond ONLY with JSON: {"is_tip": true/false, "confidence": 0.0-1.0}
 A stock tip contains a buy/sell recommendation with a specific stock name and at least one of: entry price, stop-loss, or target.
+Messages saying "exit", "sell", "book profits", or "book partial profits" with a stock name ARE tips even without a price. Return is_tip: true for these.
 General market commentary, news, greetings, or discussion is NOT a tip.
-Messages saying "hold", "continue to hold", "book profits", "book partial profits", or "trail SL" are NOT new tips. Return is_tip: false for these."""
+Messages saying "hold", "continue to hold", or "trail SL" are NOT new tips. Return is_tip: false for these."""
 
 TIER2_SYSTEM_PROMPT = """You are a stock trade signal extractor for Indian markets (NSE).
 Extract the trade signal from the message and return ONLY valid JSON with this exact structure:
@@ -20,6 +21,7 @@ Extract the trade signal from the message and return ONLY valid JSON with this e
   "symbol": "TRADING_SYMBOL (e.g. RELIANCE, INFY, TCS)",
   "exchange": "NSE",
   "action": "BUY or SELL",
+  "sell_pct": <1-100, only for SELL, default 100>,
   "entry_min": <number>,
   "entry_max": <number>,
   "stop_loss": <number or null>,
@@ -34,6 +36,8 @@ Rules:
 - If stop-loss is not mentioned, set it to null
 - If allocation percentage is not mentioned, set it to null
 - If you cannot determine the symbol or entry price, return null
+- For SELL/exit messages: set entry_min and entry_max to 0, stop_loss to null, targets to []
+- sell_pct is the percentage to sell (e.g. "exit 50%" = 50, "exit" = 100, "book partial profits" = 50)
 - Do NOT wrap in markdown code blocks"""
 
 CONFIDENCE_THRESHOLD = 0.6
@@ -155,7 +159,7 @@ async def extract_trade(text, context_messages, model, http_client):
     result = await _call_llm(messages, model, http_client, context="tier2_extract")
     if result is None or not isinstance(result, dict):
         return None
-    if not result.get("symbol") or result.get("entry_min") is None:
+    if not result.get("symbol"):
         return None
     if result.get("action") not in ("BUY", "SELL"):
         log.warning("LLM returned invalid action: %s", result.get("action"))
@@ -163,14 +167,31 @@ async def extract_trade(text, context_messages, model, http_client):
     if result.get("exchange") != "NSE":
         log.warning("LLM returned non-NSE exchange: %s, overriding to NSE", result.get("exchange"))
         result["exchange"] = "NSE"
-    if not isinstance(result.get("entry_min"), (int, float)) or result["entry_min"] <= 0:
-        log.warning("LLM returned invalid entry_min: %s", result.get("entry_min"))
-        return None
-    if not isinstance(result.get("entry_max"), (int, float)) or result["entry_max"] <= 0:
-        log.warning("LLM returned invalid entry_max: %s", result.get("entry_max"))
-        return None
-    if result["entry_min"] > result["entry_max"]:
-        result["entry_min"], result["entry_max"] = result["entry_max"], result["entry_min"]
+
+    is_sell = result["action"] == "SELL"
+
+    if is_sell:
+        result["entry_min"] = 0
+        result["entry_max"] = 0
+        result["stop_loss"] = None
+        result["targets"] = []
+        sell_pct = result.get("sell_pct", 100)
+        if not isinstance(sell_pct, (int, float)) or sell_pct < 1 or sell_pct > 100:
+            sell_pct = 100
+        result["sell_pct"] = int(sell_pct)
+    else:
+        if result.get("entry_min") is None:
+            return None
+        if not isinstance(result.get("entry_min"), (int, float)) or result["entry_min"] <= 0:
+            log.warning("LLM returned invalid entry_min: %s", result.get("entry_min"))
+            return None
+        if not isinstance(result.get("entry_max"), (int, float)) or result["entry_max"] <= 0:
+            log.warning("LLM returned invalid entry_max: %s", result.get("entry_max"))
+            return None
+        if result["entry_min"] > result["entry_max"]:
+            result["entry_min"], result["entry_max"] = result["entry_max"], result["entry_min"]
+        result["sell_pct"] = 0
+
     confidence = result.get("confidence", 0)
     if not isinstance(confidence, (int, float)) or confidence < 0 or confidence > 1:
         log.warning("LLM returned invalid confidence: %s", confidence)

@@ -93,10 +93,16 @@ async def init_db(conn: aiosqlite.Connection) -> None:
             closed_at TEXT
         );
     """)
-    try:
-        await conn.execute("ALTER TABLE trade_candidates ADD COLUMN telegram_msg_id INTEGER")
-    except Exception:
-        pass
+    for col, defn in [
+        ("telegram_msg_id", "INTEGER"),
+        ("sell_pct", "INTEGER DEFAULT 100"),
+        ("avg_buy_price", "REAL DEFAULT 0"),
+        ("held_qty", "INTEGER DEFAULT 0"),
+    ]:
+        try:
+            await conn.execute(f"ALTER TABLE trade_candidates ADD COLUMN {col} {defn}")
+        except Exception:
+            pass
     await conn.commit()
 
 
@@ -151,11 +157,14 @@ async def save_signal(conn, message_db_id, signal_data):
     return cursor.lastrowid
 
 
-async def save_trade_candidate(conn, signal_id, symbol, quantity, amount, stop_loss, current_price, entry_min, entry_max):
+async def save_trade_candidate(conn, signal_id, symbol, quantity, amount, stop_loss, current_price,
+                               entry_min, entry_max, sell_pct=0, avg_buy_price=0, held_qty=0):
     cursor = await conn.execute(
-        """INSERT INTO trade_candidates (signal_id, symbol, quantity, amount, stop_loss, current_price_at_send, entry_min, entry_max)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-        (signal_id, symbol, quantity, amount, stop_loss, current_price, entry_min, entry_max),
+        """INSERT INTO trade_candidates (signal_id, symbol, quantity, amount, stop_loss, current_price_at_send,
+           entry_min, entry_max, sell_pct, avg_buy_price, held_qty)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (signal_id, symbol, quantity, amount, stop_loss, current_price, entry_min, entry_max,
+         sell_pct, avg_buy_price, held_qty),
     )
     await conn.commit()
     return cursor.lastrowid
@@ -339,7 +348,8 @@ async def set_telegram_msg_id(conn, candidate_id, telegram_msg_id):
 async def get_all_pending_candidates(conn):
     cursor = await conn.execute(
         """SELECT tc.id, tc.telegram_msg_id, tc.symbol, s.exchange, tc.entry_min, tc.entry_max,
-                  tc.stop_loss, tc.quantity, s.action, s.targets, m.text as original_message, tc.created_at
+                  tc.stop_loss, tc.quantity, s.action, s.targets, m.text as original_message, tc.created_at,
+                  tc.sell_pct, tc.avg_buy_price, tc.held_qty
            FROM trade_candidates tc
            JOIN signals s ON tc.signal_id = s.id
            JOIN messages m ON s.message_id = m.id

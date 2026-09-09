@@ -484,3 +484,200 @@ async def test_verify_polls_until_terminal():
     assert broker.get_order_status.call_count == 3
     sent_text = bot.send_message.call_args[0][1]
     assert "FILLED" in sent_text or "filled" in sent_text.lower()
+
+
+# --- Sell/exit card and approval tests ---
+
+
+def _make_sell_candidate(**overrides):
+    base = {
+        "id": 10,
+        "signal_id": 5,
+        "symbol": "CAPLINPOINT",
+        "exchange": "NSE",
+        "action": "SELL",
+        "quantity": 10,
+        "amount": 14500.0,
+        "stop_loss": 0,
+        "entry_min": 0,
+        "entry_max": 0,
+        "sell_pct": 100,
+        "avg_buy_price": 1200.0,
+        "held_qty": 10,
+        "targets": "[]",
+        "reasoning": "exit call",
+        "confidence": 0.85,
+        "allocation_pct": None,
+        "original_message": "Exit Caplin Point",
+        "channel_id": 123,
+        "status": "pending",
+        "current_price_at_send": 1450.0,
+        "created_at": "2026-09-09T10:00:00",
+    }
+    base.update(overrides)
+    return base
+
+
+def test_format_sell_card_shows_pnl():
+    from approval_bot import _format_sell_card
+    validation = ValidationResult(
+        valid=True, reason="ok", symbol="CAPLINPOINT", exchange="NSE",
+        action="SELL", security_id="1234", quantity=10, amount=14500.0,
+        stop_loss=0, entry_min=0, entry_max=0, targets=[],
+        current_price=1450.0, sell_pct=100, avg_buy_price=1200.0, held_qty=10,
+    )
+    card = format_trade_card(
+        candidate={"id": 10, "created_at": "2026-09-09T10:00:00"},
+        validation=validation,
+        original_message="Exit Caplin Point",
+    )
+    assert "SELL CANDIDATE" in card
+    assert "CAPLINPOINT" in card
+    assert "1,200.00" in card
+    assert "1,450.00" in card
+    assert "+20.8%" in card
+    assert "10 of 10 held" in card
+    assert "14,500" in card
+    assert "A to approve" in card
+
+
+def test_format_sell_card_partial_shows_pct():
+    validation = ValidationResult(
+        valid=True, reason="ok", symbol="CAPLINPOINT", exchange="NSE",
+        action="SELL", security_id="1234", quantity=5, amount=7250.0,
+        stop_loss=0, entry_min=0, entry_max=0, targets=[],
+        current_price=1450.0, sell_pct=50, avg_buy_price=1200.0, held_qty=10,
+    )
+    card = format_trade_card(
+        candidate={"id": 10, "created_at": "2026-09-09T10:00:00"},
+        validation=validation,
+        original_message="Exit 50% Caplin Point",
+    )
+    assert "SELL 50%" in card
+    assert "5 of 10 held" in card
+
+
+def test_format_sell_card_loss_shows_negative():
+    validation = ValidationResult(
+        valid=True, reason="ok", symbol="RELIANCE", exchange="NSE",
+        action="SELL", security_id="2885", quantity=3, amount=4200.0,
+        stop_loss=0, entry_min=0, entry_max=0, targets=[],
+        current_price=1400.0, sell_pct=100, avg_buy_price=1500.0, held_qty=3,
+    )
+    card = format_trade_card(
+        candidate={"id": 1, "created_at": "2026-09-09T10:00:00"},
+        validation=validation,
+        original_message="Exit Reliance",
+    )
+    assert "-6.7%" in card
+    assert "-100.00/share" in card
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_approval_skips_balance_check():
+    from brokers.base import Position
+    broker = _make_broker(balance=200, price=1450.0)
+    broker.get_positions.return_value = [
+        Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate()), \
+         patch("approval_bot._is_market_open", return_value=(True, "")), \
+         patch("approval_bot.save_decision"), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.save_trade"), \
+         patch("approval_bot.update_candidate_status"), \
+         patch("db.get_candidate_status", return_value="pending"):
+        result = await handle_approval_reply("A", 10, broker, db_conn, bot, 123)
+
+    assert result == "finalized"
+    broker.place_order.assert_called_once()
+    broker.get_balance.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_approval_no_position_errors():
+    from brokers.base import Position
+    broker = _make_broker(price=1450.0)
+    broker.get_positions.return_value = []
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate()), \
+         patch("approval_bot._is_market_open", return_value=(True, "")):
+        result = await handle_approval_reply("A", 10, broker, db_conn, bot, 123)
+
+    assert result == "error"
+    assert "No position" in bot.send_message.call_args[0][1]
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_rejection_message():
+    broker = _make_broker()
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate()), \
+         patch("approval_bot.update_candidate_status"), \
+         patch("approval_bot.save_decision"):
+        result = await handle_approval_reply("R", 10, broker, db_conn, bot, 123)
+
+    assert result == "finalized"
+    sent = bot.send_message.call_args[0][1]
+    assert "Rejected" in sent
+    assert "SELL" in sent
+    assert "CAPLINPOINT" in sent
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_partial_does_not_close_buy_trade():
+    from brokers.base import Position
+    broker = _make_broker(price=1450.0)
+    broker.get_positions.return_value = [
+        Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate(sell_pct=50)), \
+         patch("approval_bot._is_market_open", return_value=(True, "")), \
+         patch("approval_bot.save_decision"), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.save_trade"), \
+         patch("approval_bot.update_candidate_status"), \
+         patch("db.get_candidate_status", return_value="pending"), \
+         patch("db.get_open_buy_trade") as mock_get_buy, \
+         patch("db.close_trade") as mock_close:
+        result = await handle_approval_reply("A", 10, broker, db_conn, bot, 123)
+
+    assert result == "finalized"
+    mock_get_buy.assert_not_called()
+    mock_close.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_full_closes_buy_trade():
+    from brokers.base import Position
+    broker = _make_broker(price=1450.0)
+    broker.get_positions.return_value = [
+        Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate(sell_pct=100)), \
+         patch("approval_bot._is_market_open", return_value=(True, "")), \
+         patch("approval_bot.save_decision"), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.save_trade"), \
+         patch("approval_bot.update_candidate_status"), \
+         patch("db.get_candidate_status", return_value="pending"), \
+         patch("db.get_open_buy_trade", return_value=42) as mock_get_buy, \
+         patch("db.close_trade") as mock_close:
+        result = await handle_approval_reply("A", 10, broker, db_conn, bot, 123)
+
+    assert result == "finalized"
+    mock_get_buy.assert_called_once_with(db_conn, "CAPLINPOINT")
+    mock_close.assert_called_once()
