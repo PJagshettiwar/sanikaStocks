@@ -365,3 +365,90 @@ async def test_detect_signal_no_retry_on_400(monkeypatch):
     with pytest.raises(httpx.HTTPStatusError):
         await detect_signal("Buy RELIANCE above 1480", model="test-model", http_client=client)
     assert client.post.call_count == 1
+
+
+# --- Sell/exit signal tests ---
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_sell_zeroes_entry_and_sets_sell_pct():
+    signal_json = json.dumps({
+        "symbol": "CAPLINPOINT", "exchange": "NSE", "action": "SELL",
+        "sell_pct": 100, "entry_min": 0, "entry_max": 0, "stop_loss": None,
+        "targets": [], "allocation_pct": None, "confidence": 0.85,
+        "reasoning": "Exit call",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_llm_response(signal_json)
+
+    result = await extract_trade("Exit Caplin Point", [], model="test", http_client=client)
+    assert result["action"] == "SELL"
+    assert result["entry_min"] == 0
+    assert result["entry_max"] == 0
+    assert result["stop_loss"] is None
+    assert result["targets"] == []
+    assert result["sell_pct"] == 100
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_sell_partial_pct():
+    signal_json = json.dumps({
+        "symbol": "CAPLINPOINT", "exchange": "NSE", "action": "SELL",
+        "sell_pct": 50, "entry_min": 0, "entry_max": 0, "stop_loss": None,
+        "targets": [], "allocation_pct": None, "confidence": 0.8,
+        "reasoning": "Partial exit",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_llm_response(signal_json)
+
+    result = await extract_trade("Exit 50% Caplin Point", [], model="test", http_client=client)
+    assert result["sell_pct"] == 50
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_sell_invalid_pct_defaults_to_100():
+    signal_json = json.dumps({
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "SELL",
+        "sell_pct": 150, "entry_min": 0, "entry_max": 0, "stop_loss": None,
+        "targets": [], "allocation_pct": None, "confidence": 0.8,
+        "reasoning": "Exit",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_llm_response(signal_json)
+
+    result = await extract_trade("Exit Reliance", [], model="test", http_client=client)
+    assert result["sell_pct"] == 100
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_sell_forces_zero_entry():
+    """Even if LLM returns nonzero entry for SELL, extract_trade zeroes them."""
+    signal_json = json.dumps({
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "SELL",
+        "sell_pct": 100, "entry_min": 1500.0, "entry_max": 1520.0,
+        "stop_loss": 1400.0, "targets": [1480.0], "allocation_pct": None,
+        "confidence": 0.8, "reasoning": "Exit",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_llm_response(signal_json)
+
+    result = await extract_trade("Exit Reliance", [], model="test", http_client=client)
+    assert result["entry_min"] == 0
+    assert result["entry_max"] == 0
+    assert result["stop_loss"] is None
+    assert result["targets"] == []
+
+
+@pytest.mark.asyncio
+async def test_extract_trade_buy_gets_sell_pct_zero():
+    signal_json = json.dumps({
+        "symbol": "RELIANCE", "exchange": "NSE", "action": "BUY",
+        "entry_min": 1482.0, "entry_max": 1490.0, "stop_loss": 1455.0,
+        "targets": [1525.0], "allocation_pct": None, "confidence": 0.87,
+        "reasoning": "Strong setup",
+    })
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.post.return_value = _mock_llm_response(signal_json)
+
+    result = await extract_trade("Buy RELIANCE above 1480", [], model="test", http_client=client)
+    assert result["sell_pct"] == 0

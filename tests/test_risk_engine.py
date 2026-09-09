@@ -198,6 +198,98 @@ async def test_sell_signal_uses_held_quantity():
 
 
 @pytest.mark.asyncio
+async def test_sell_partial_50pct_calculates_qty():
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result = await validate_signal(
+        _make_signal(action="SELL", sell_pct=50), channel_id=123, broker=broker,
+        db_conn=db_conn, message_timestamp=timestamp,
+    )
+    assert result.valid is True
+    assert result.quantity == 5
+    assert result.sell_pct == 50
+    assert result.held_qty == 10
+    assert result.avg_buy_price == 1400.0
+
+
+@pytest.mark.asyncio
+async def test_sell_partial_rounds_down():
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=7, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result = await validate_signal(
+        _make_signal(action="SELL", sell_pct=30), channel_id=123, broker=broker,
+        db_conn=db_conn, message_timestamp=timestamp,
+    )
+    assert result.valid is True
+    assert result.quantity == 2  # floor(7 * 30 / 100) = 2
+
+
+@pytest.mark.asyncio
+async def test_sell_partial_rounds_to_zero_rejected():
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result = await validate_signal(
+        _make_signal(action="SELL", sell_pct=30), channel_id=123, broker=broker,
+        db_conn=db_conn, message_timestamp=timestamp,
+    )
+    assert result.valid is False
+    assert "0 shares" in result.reason
+
+
+@pytest.mark.asyncio
+async def test_sell_skips_duplicate_and_daily_limit_checks():
+    """SELL should pass even when duplicate/daily-limit would block a BUY."""
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    with patch("risk_engine.has_duplicate_signal", return_value=True), \
+         patch("risk_engine.get_today_trade_count", return_value=99):
+        result = await validate_signal(
+            _make_signal(action="SELL"), channel_id=123, broker=broker,
+            db_conn=db_conn, message_timestamp=timestamp,
+        )
+    assert result.valid is True
+
+
+@pytest.mark.asyncio
+async def test_sell_sets_zero_stop_loss_and_entry():
+    broker = _make_broker()
+    broker.get_positions.return_value = [
+        Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=5, avg_price=1400.0)
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result = await validate_signal(
+        _make_signal(action="SELL"), channel_id=123, broker=broker,
+        db_conn=db_conn, message_timestamp=timestamp,
+    )
+    assert result.stop_loss == 0
+    assert result.entry_min == 0
+    assert result.entry_max == 0
+    assert result.targets == []
+
+
+@pytest.mark.asyncio
 async def test_sell_signal_no_position_rejected():
     broker = _make_broker()
     broker.get_positions.return_value = []
