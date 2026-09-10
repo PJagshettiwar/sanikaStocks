@@ -461,6 +461,42 @@ async def test_live_tier2_extracts_signal():
     assert result["stop_loss"] is not None
 
 
+# ---- Position matching by security_id ----
+
+
+@pytest.mark.asyncio
+async def test_sell_matches_position_by_security_id_when_symbol_differs(db):
+    """Instruments API returns symbol 'CAPLIPOINT', positions API returns 'Caplin Point Lab'.
+    The sell should still work because both share security_id '54321'."""
+    msg_id = await save_message(db, 123, 3001, "Exit Caplin Point", "2026-09-10T10:00:00")
+    sig_id = await save_signal(db, msg_id, {
+        "symbol": "CAPLIPOINT", "exchange": "NSE", "action": "SELL",
+        "entry_min": 0, "entry_max": 0, "stop_loss": None,
+        "targets": [], "confidence": 0.85, "reasoning": "exit call",
+    })
+    cand_id = await save_trade_candidate(
+        db, sig_id, "CAPLIPOINT", 10, 14500.0, 0, 1450.0, 0, 0,
+        sell_pct=100, avg_buy_price=1200.0, held_qty=10,
+    )
+    await update_candidate_status(db, cand_id, "pending")
+
+    broker = _make_broker(price=1450.0)
+    broker.get_instruments.return_value = {"CAPLIPOINT": "54321"}
+    broker.get_positions.return_value = [
+        Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    bot = _make_bot()
+
+    with patch("approval_bot._is_market_open", return_value=(True, "")):
+        result = await handle_approval_reply("A", cand_id, broker, db, bot, 123)
+
+    assert result == "finalized"
+    broker.place_order.assert_called_once()
+    order_call = broker.place_order.call_args[0][0]
+    assert order_call.qty == 10
+    assert order_call.txn_type == "SELL"
+
+
 # ---- Live sell/exit scenario tests ----
 
 

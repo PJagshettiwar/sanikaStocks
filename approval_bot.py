@@ -487,8 +487,20 @@ async def _resolve_sell_qty(candidate, quote, broker, bot_client, chat_id):
         log.error("Broker positions check failed: %s", e)
         await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
         return None, None, None
-    held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
+    try:
+        instruments = await broker.get_instruments()
+        sec_id = instruments.get(candidate["symbol"])
+    except Exception:
+        sec_id = None
+    if sec_id:
+        held = next((p for p in positions if p.security_id == sec_id), None)
+    else:
+        held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
     if not held or held.net_qty <= 0:
+        if positions:
+            log.info("Position lookup failed for %s (security_id=%s). Positions: %s",
+                     candidate["symbol"], sec_id,
+                     [(p.symbol, p.security_id) for p in positions])
         await bot_client.send_message(chat_id, f"No position held for {candidate['symbol']}.")
         return None, None, None
     qty = math.floor(held.net_qty * sell_pct / 100)

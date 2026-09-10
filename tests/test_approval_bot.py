@@ -681,3 +681,28 @@ async def test_handle_sell_full_closes_buy_trade():
     assert result == "finalized"
     mock_get_buy.assert_called_once_with(db_conn, "CAPLINPOINT")
     mock_close.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_handle_sell_matches_position_by_security_id_not_symbol():
+    """Position symbol differs from candidate symbol but security_id matches."""
+    from brokers.base import Position
+    broker = _make_broker(price=1450.0)
+    broker.get_instruments.return_value = {"CAPLIPOINT": "54321"}
+    broker.get_positions.return_value = [
+        Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    db_conn = AsyncMock()
+    bot = _make_bot_client()
+
+    with patch("approval_bot.get_pending_candidate", return_value=_make_sell_candidate(symbol="CAPLIPOINT")), \
+         patch("approval_bot._is_market_open", return_value=(True, "")), \
+         patch("approval_bot.save_decision"), \
+         patch("approval_bot.save_audit_log"), \
+         patch("approval_bot.save_trade"), \
+         patch("approval_bot.update_candidate_status"), \
+         patch("db.get_candidate_status", return_value="pending"):
+        result = await handle_approval_reply("A", 10, broker, db_conn, bot, 123)
+
+    assert result == "finalized"
+    broker.place_order.assert_called_once()

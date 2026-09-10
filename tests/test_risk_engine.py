@@ -290,6 +290,31 @@ async def test_sell_sets_zero_stop_loss_and_entry():
 
 
 @pytest.mark.asyncio
+async def test_sell_matches_position_by_security_id_not_symbol():
+    """Position symbol differs from instrument symbol but security_id matches."""
+    broker = _make_broker(instruments={"CAPLIPOINT": "54321"})
+    broker.get_quote.return_value = Quote(
+        symbol="CAPLIPOINT", exchange="NSE", price=1450.0,
+        volume=100000, day_high=1460.0, day_low=1440.0,
+    )
+    broker.get_positions.return_value = [
+        Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
+    ]
+    db_conn = AsyncMock()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    result = await validate_signal(
+        _make_signal(symbol="CAPLIPOINT", action="SELL", sell_pct=100),
+        channel_id=123, broker=broker,
+        db_conn=db_conn, message_timestamp=timestamp,
+    )
+    assert result.valid is True
+    assert result.quantity == 10
+    assert result.avg_buy_price == 1200.0
+    assert result.held_qty == 10
+
+
+@pytest.mark.asyncio
 async def test_sell_signal_no_position_rejected():
     broker = _make_broker()
     broker.get_positions.return_value = []
