@@ -65,6 +65,9 @@ class BrokerInterface(ABC):
     async def get_positions(self) -> list[Position]: ...
 
     @abstractmethod
+    async def get_holdings(self) -> list[Position]: ...
+
+    @abstractmethod
     async def get_order_status(self, order_id: str) -> OrderStatus: ...
 
     @abstractmethod

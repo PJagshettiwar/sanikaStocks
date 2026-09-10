@@ -30,6 +30,8 @@ def _make_broker(balance=100000, price=1486.0, instruments=None):
         volume=1000000, day_high=1495.0, day_low=1480.0,
     )
     broker.get_instruments.return_value = instruments or {"RELIANCE": "2885"}
+    broker.get_holdings.return_value = []
+    broker.get_positions.return_value = []
     return broker
 
 
@@ -179,7 +181,7 @@ async def test_daily_trade_limit_rejected():
 @pytest.mark.asyncio
 async def test_sell_signal_uses_held_quantity():
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -200,7 +202,7 @@ async def test_sell_signal_uses_held_quantity():
 @pytest.mark.asyncio
 async def test_sell_partial_50pct_calculates_qty():
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -220,7 +222,7 @@ async def test_sell_partial_50pct_calculates_qty():
 @pytest.mark.asyncio
 async def test_sell_partial_rounds_down():
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=7, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -237,7 +239,7 @@ async def test_sell_partial_rounds_down():
 @pytest.mark.asyncio
 async def test_sell_partial_rounds_to_zero_rejected():
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -255,7 +257,7 @@ async def test_sell_partial_rounds_to_zero_rejected():
 async def test_sell_skips_duplicate_and_daily_limit_checks():
     """SELL should pass even when duplicate/daily-limit would block a BUY."""
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=10, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -273,7 +275,7 @@ async def test_sell_skips_duplicate_and_daily_limit_checks():
 @pytest.mark.asyncio
 async def test_sell_sets_zero_stop_loss_and_entry():
     broker = _make_broker()
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=5, avg_price=1400.0)
     ]
     db_conn = AsyncMock()
@@ -297,7 +299,7 @@ async def test_sell_matches_position_by_security_id_not_symbol():
         symbol="CAPLIPOINT", exchange="NSE", price=1450.0,
         volume=100000, day_high=1460.0, day_low=1440.0,
     )
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     db_conn = AsyncMock()
