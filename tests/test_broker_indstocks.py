@@ -3,7 +3,7 @@ import time
 import pytest
 import httpx
 from unittest.mock import AsyncMock, patch
-from brokers.base import BrokerInterface, Order, Quote, OrderResult, OrderStatus
+from brokers.base import BrokerInterface, Order, Position, Quote, OrderResult, OrderStatus
 from brokers.indstocks import INDstocksBroker, RateLimitError
 
 
@@ -439,3 +439,55 @@ async def test_get_order_status_failed_order_has_extra_info():
     assert result.status == "FAILED"
     assert result.traded_qty == 0
     assert "Insufficient Margin" in result.extra_info
+
+
+@pytest.mark.asyncio
+async def test_get_holdings_uses_quantity_field():
+    mock_response = httpx.Response(
+        200,
+        json={"status": "success", "data": [
+            {"security_id": "2885", "symbol": "RELIANCE", "exchange": "NSE",
+             "quantity": 15, "avg_price": 1490.0},
+            {"security_id": "5678", "symbol": "INFY",
+             "quantity": 30, "avg_price": 1200.0},
+        ]},
+        request=httpx.Request("GET", "https://api.indstocks.com/portfolio/holdings"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
+    holdings = await broker.get_holdings()
+
+    assert len(holdings) == 2
+    assert all(isinstance(h, Position) for h in holdings)
+    assert holdings[0].security_id == "2885"
+    assert holdings[0].net_qty == 15
+    assert holdings[0].avg_price == 1490.0
+    assert holdings[0].exchange == "NSE"
+    assert holdings[1].symbol == "INFY"
+    assert holdings[1].net_qty == 30
+    assert holdings[1].exchange == "NSE"
+
+
+@pytest.mark.asyncio
+async def test_get_holdings_falls_back_to_net_qty():
+    mock_response = httpx.Response(
+        200,
+        json={"status": "success", "data": [
+            {"security_id": "2885", "symbol": "RELIANCE", "exchange": "NSE",
+             "net_qty": 10, "avg_price": 1490.0},
+        ]},
+        request=httpx.Request("GET", "https://api.indstocks.com/portfolio/holdings"),
+    )
+    client = AsyncMock(spec=httpx.AsyncClient)
+    client.request = AsyncMock(return_value=mock_response)
+
+    broker = INDstocksBroker(client_id="test", totp_secret="test", mpin="test", http_client=client)
+    broker._token = "test_token"
+    broker._headers["Authorization"] = "test_token"
+    holdings = await broker.get_holdings()
+
+    assert holdings[0].net_qty == 10
