@@ -72,13 +72,17 @@ async def validate_signal(signal, channel_id, broker: BrokerInterface, db_conn, 
 
     if action == "SELL":
         sell_pct = signal.get("sell_pct", 100)
-        positions = await broker.get_positions()
-        held = next((p for p in positions if p.security_id == security_id), None)
+        holdings = await broker.get_holdings()
+        held = next((p for p in holdings if p.security_id == security_id), None)
+        positions = []
         if not held or held.net_qty <= 0:
-            if positions:
-                log.info("Position lookup failed for %s (security_id=%s). Positions: %s",
-                         resolved, security_id,
-                         [(p.symbol, p.security_id) for p in positions])
+            positions = await broker.get_positions()
+            held = next((p for p in positions if p.security_id == security_id), None)
+        if not held or held.net_qty <= 0:
+            log.info("No position for %s (security_id=%s). Holdings: %s, Positions: %s",
+                     resolved, security_id,
+                     [(p.symbol, p.security_id) for p in holdings],
+                     [(p.symbol, p.security_id) for p in positions])
             return _fail(f"No position held for {resolved}")
         quantity = math.floor(held.net_qty * sell_pct / 100)
         if quantity < 1:

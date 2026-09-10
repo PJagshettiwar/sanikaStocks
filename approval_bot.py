@@ -482,25 +482,35 @@ async def handle_approval_reply(text: str, candidate_id: int, broker: BrokerInte
 async def _resolve_sell_qty(candidate, quote, broker, bot_client, chat_id):
     sell_pct = candidate.get("sell_pct", 100)
     try:
-        positions = await broker.get_positions()
-    except Exception as e:
-        log.error("Broker positions check failed: %s", e)
-        await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
-        return None, None, None
-    try:
         instruments = await broker.get_instruments()
         sec_id = instruments.get(candidate["symbol"])
     except Exception:
         sec_id = None
+    try:
+        holdings = await broker.get_holdings()
+    except Exception as e:
+        log.error("Broker holdings check failed: %s", e)
+        await bot_client.send_message(chat_id, "Broker unavailable. Reply A again when broker is back.")
+        return None, None, None
     if sec_id:
-        held = next((p for p in positions if p.security_id == sec_id), None)
+        held = next((p for p in holdings if p.security_id == sec_id), None)
     else:
-        held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
+        held = next((p for p in holdings if p.symbol == candidate["symbol"]), None)
+    positions = []
     if not held or held.net_qty <= 0:
-        if positions:
-            log.info("Position lookup failed for %s (security_id=%s). Positions: %s",
-                     candidate["symbol"], sec_id,
-                     [(p.symbol, p.security_id) for p in positions])
+        try:
+            positions = await broker.get_positions()
+        except Exception:
+            positions = []
+        if sec_id:
+            held = next((p for p in positions if p.security_id == sec_id), None)
+        else:
+            held = next((p for p in positions if p.symbol == candidate["symbol"]), None)
+    if not held or held.net_qty <= 0:
+        log.info("No position for %s (security_id=%s). Holdings: %s, Positions: %s",
+                 candidate["symbol"], sec_id,
+                 [(p.symbol, p.security_id) for p in holdings],
+                 [(p.symbol, p.security_id) for p in positions])
         await bot_client.send_message(chat_id, f"No position held for {candidate['symbol']}.")
         return None, None, None
     qty = math.floor(held.net_qty * sell_pct / 100)

@@ -71,6 +71,8 @@ def _make_broker(balance=100000, price=1486.0):
     broker.get_instruments.return_value = {"RELIANCE": "2885"}
     broker.get_tick_size = lambda symbol: 0.05
     broker.place_order.return_value = OrderResult(order_id="ORD123", status="placed")
+    broker.get_holdings.return_value = []
+    broker.get_positions.return_value = []
     return broker
 
 
@@ -577,7 +579,8 @@ def test_format_sell_card_loss_shows_negative():
 async def test_handle_sell_approval_skips_balance_check():
     from brokers.base import Position
     broker = _make_broker(balance=200, price=1450.0)
-    broker.get_positions.return_value = [
+    broker.get_instruments.return_value = {"CAPLINPOINT": "1234"}
+    broker.get_holdings.return_value = [
         Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     db_conn = AsyncMock()
@@ -601,7 +604,7 @@ async def test_handle_sell_approval_skips_balance_check():
 async def test_handle_sell_approval_no_position_errors():
     from brokers.base import Position
     broker = _make_broker(price=1450.0)
-    broker.get_positions.return_value = []
+    broker.get_instruments.return_value = {"CAPLINPOINT": "1234"}
     db_conn = AsyncMock()
     bot = _make_bot_client()
 
@@ -635,7 +638,8 @@ async def test_handle_sell_rejection_message():
 async def test_handle_sell_partial_does_not_close_buy_trade():
     from brokers.base import Position
     broker = _make_broker(price=1450.0)
-    broker.get_positions.return_value = [
+    broker.get_instruments.return_value = {"CAPLINPOINT": "1234"}
+    broker.get_holdings.return_value = [
         Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     db_conn = AsyncMock()
@@ -661,7 +665,8 @@ async def test_handle_sell_partial_does_not_close_buy_trade():
 async def test_handle_sell_full_closes_buy_trade():
     from brokers.base import Position
     broker = _make_broker(price=1450.0)
-    broker.get_positions.return_value = [
+    broker.get_instruments.return_value = {"CAPLINPOINT": "1234"}
+    broker.get_holdings.return_value = [
         Position(security_id="1234", symbol="CAPLINPOINT", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     db_conn = AsyncMock()
@@ -689,7 +694,7 @@ async def test_handle_sell_matches_position_by_security_id_not_symbol():
     from brokers.base import Position
     broker = _make_broker(price=1450.0)
     broker.get_instruments.return_value = {"CAPLIPOINT": "54321"}
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     db_conn = AsyncMock()

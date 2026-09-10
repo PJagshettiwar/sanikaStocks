@@ -82,6 +82,7 @@ def _make_broker(balance=100000, price=1486.0):
     broker.get_tick_size = lambda symbol: 0.05
     broker.place_order.return_value = OrderResult(order_id="ORD123", status="placed")
     broker.get_positions.return_value = []
+    broker.get_holdings.return_value = []
     return broker
 
 
@@ -201,7 +202,7 @@ async def test_sell_closes_buy_trade(db):
     )
 
     broker = _make_broker(price=1525.0)
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1486.0),
     ]
     bot = _make_bot()
@@ -362,7 +363,7 @@ async def test_limit_price_has_buffer(db):
         sell_pct=100, avg_buy_price=1486.0, held_qty=3,
     )
     broker2 = _make_broker(price=1486.0)
-    broker2.get_positions.return_value = [
+    broker2.get_holdings.return_value = [
         Position(security_id="2885", symbol="RELIANCE", exchange="NSE", net_qty=3, avg_price=1486.0),
     ]
     bot2 = _make_bot()
@@ -482,7 +483,7 @@ async def test_sell_matches_position_by_security_id_when_symbol_differs(db):
 
     broker = _make_broker(price=1450.0)
     broker.get_instruments.return_value = {"CAPLIPOINT": "54321"}
-    broker.get_positions.return_value = [
+    broker.get_holdings.return_value = [
         Position(security_id="54321", symbol="Caplin Point Lab", exchange="NSE", net_qty=10, avg_price=1200.0),
     ]
     bot = _make_bot()

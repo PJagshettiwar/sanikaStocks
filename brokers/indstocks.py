@@ -201,6 +201,19 @@ class INDstocksBroker(BrokerInterface):
             for p in resp.json().get("data", [])
         ]
 
+    async def get_holdings(self) -> list[Position]:
+        resp = await self._request("GET", f"{BASE_URL}/portfolio/holdings")
+        return [
+            Position(
+                security_id=h["security_id"],
+                symbol=h["symbol"],
+                exchange=h.get("exchange", "NSE"),
+                net_qty=int(h.get("quantity", h.get("net_qty", 0))),
+                avg_price=float(h.get("avg_price", 0)),
+            )
+            for h in resp.json().get("data", [])
+        ]
+
     async def get_order_status(self, order_id: str) -> OrderStatus:
         resp = await self._request(
             "GET", f"{BASE_URL}/order",
