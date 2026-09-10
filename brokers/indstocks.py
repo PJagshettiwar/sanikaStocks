@@ -208,7 +208,7 @@ class INDstocksBroker(BrokerInterface):
                 security_id=h["security_id"],
                 symbol=h["symbol"],
                 exchange=h.get("exchange", "NSE"),
-                net_qty=int(h.get("quantity", h.get("net_qty", 0))),
+                net_qty=int(h.get("total_qty", h.get("net_qty", 0))),
                 avg_price=float(h.get("avg_price", 0)),
             )
             for h in resp.json().get("data", [])

@@ -442,14 +442,14 @@ async def test_get_order_status_failed_order_has_extra_info():
 
 
 @pytest.mark.asyncio
-async def test_get_holdings_uses_quantity_field():
+async def test_get_holdings_uses_total_qty_field():
     mock_response = httpx.Response(
         200,
         json={"status": "success", "data": [
             {"security_id": "2885", "symbol": "RELIANCE", "exchange": "NSE",
-             "quantity": 15, "avg_price": 1490.0},
+             "total_qty": 15, "avg_price": 1490.0},
             {"security_id": "5678", "symbol": "INFY",
-             "quantity": 30, "avg_price": 1200.0},
+             "total_qty": 30, "avg_price": 1200.0},
         ]},
         request=httpx.Request("GET", "https://api.indstocks.com/portfolio/holdings"),
     )
